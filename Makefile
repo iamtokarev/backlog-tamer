@@ -5,4 +5,7 @@ format:
 	uv run ruff format
 
 lint:
-	uv run ruff lint
+	uv run ruff check
+
+lint-fix:
+	uv run ruff check --fix
