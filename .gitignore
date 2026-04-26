@@ -14,3 +14,6 @@ wheels/
 
 # Jupyter Notebook files
 *.ipynb
+
+# Dev database files
+*.db
