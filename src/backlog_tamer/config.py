@@ -12,9 +12,11 @@ class AgentConfig(BaseSettings):
 class Settings(BaseSettings):
     agent: AgentConfig
 
+    database_url: str = "sqlite:///backlog_tamer.db"
+
     langsmith_tracing: bool = True
     langsmith_endpoint: str = "https://eu.api.smith.langchain.com"
-    langsmith_api_key: SecretStr
+    langsmith_api_key: SecretStr | None = None
     langsmith_project: str = "backlog-tamer"
 
     model_config = SettingsConfigDict(

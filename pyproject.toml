@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.21.0",
     "google-adk>=2.0.0a3",
     "langsmith[google-adk]>=0.7.36",
     "litellm>=1.83.12",
@@ -12,6 +13,7 @@ dependencies = [
     "pydantic>=2.12.5",
     "pydantic-settings>=2.14.0",
     "pypdf>=6.10.2",
+    "sqlalchemy[asyncio]>=2.0.0",
 ]
 
 [build-system]
