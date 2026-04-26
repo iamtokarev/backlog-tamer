@@ -10,6 +10,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from google.adk.tools import ToolContext
+
 from ..schemas import FetchedUrl
 
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
@@ -45,6 +47,7 @@ X_STATUS_PATH_RE: Final[re.Pattern[str]] = re.compile(
     r"^/(?:i/web/)?(?:[A-Za-z0-9_]+)/status/(\d+)(?:/)?$"
 )
 X_OEMBED_ENDPOINT: Final[str] = "https://publish.twitter.com/oembed"
+FETCHED_CONTEXT_STATE_KEY: Final[str] = "fetched_context"
 
 
 class RedirectLimitExceededError(ValueError):
@@ -64,7 +67,7 @@ class SafeRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, safe_url)
 
 
-def fetch_url(url: str) -> dict:
+def fetch_url(url: str, tool_context: ToolContext | None = None) -> dict:
     """Fetch a user-provided public URL and return compact triage context.
 
     Use this when the intake item contains a link and you need enough signal to
@@ -82,14 +85,35 @@ def fetch_url(url: str) -> dict:
     try:
         normalized_url = _normalize_public_url(url)
     except ValueError as exc:
-        return FetchedUrl(
+        result = FetchedUrl(
             status="error",
             requested_url=url,
             error=str(exc),
             notes=["Only public http/https URLs are allowed."],
         ).model_dump(mode="json")
+        _persist_fetch_result(url, result, tool_context)
+        return result
 
-    return _fetch_url_cached(normalized_url).model_dump(mode="json")
+    result = _fetch_url_cached(normalized_url).model_dump(mode="json")
+    _persist_fetch_result(normalized_url, result, tool_context)
+    return result
+
+
+def _persist_fetch_result(
+    key: str,
+    result: dict,
+    tool_context: ToolContext | None,
+) -> None:
+    if tool_context is None:
+        return
+
+    existing = tool_context.state.get(FETCHED_CONTEXT_STATE_KEY, {})
+    if not isinstance(existing, dict):
+        existing = {}
+
+    updated = dict(existing)
+    updated[key] = result
+    tool_context.state[FETCHED_CONTEXT_STATE_KEY] = updated
 
 
 @lru_cache(maxsize=MAX_CACHED_URLS)

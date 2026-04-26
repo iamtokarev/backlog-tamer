@@ -9,7 +9,10 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from backlog_tamer.agents.intake_triage.schemas import IncomingContext, SourceLink
-from backlog_tamer.agents.intake_triage.workflow import build_triage_message
+from backlog_tamer.agents.intake_triage.workflow import (
+    build_triage_message,
+    build_triage_state_delta,
+)
 from backlog_tamer.config import get_settings
 
 APP_NAME = "backlog_tamer"
@@ -119,6 +122,7 @@ async def run_turn(
     session_id: str,
     message: types.Content,
     invocation_id: str | None = None,
+    state_delta: dict[str, Any] | None = None,
 ) -> list[Any]:
     events: list[Any] = []
     async for event in runner.run_async(
@@ -126,6 +130,7 @@ async def run_turn(
         session_id=session_id,
         invocation_id=invocation_id,
         new_message=message,
+        state_delta=state_delta,
     ):
         events.append(event)
         render_event(event)
@@ -178,6 +183,7 @@ async def main() -> None:
         user_id=args.user_id,
         session_id=args.session_id,
         message=first_message,
+        state_delta=build_triage_state_delta(context),
     )
 
     try:

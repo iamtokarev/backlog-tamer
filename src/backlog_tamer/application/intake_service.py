@@ -8,7 +8,10 @@ from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
 from backlog_tamer.agents.intake_triage.schemas import DraftProposal, IncomingContext
-from backlog_tamer.agents.intake_triage.workflow import build_triage_message
+from backlog_tamer.agents.intake_triage.workflow import (
+    build_triage_message,
+    build_triage_state_delta,
+)
 from backlog_tamer.config import Settings, get_settings
 
 from .confirmation_store import ConfirmationStore, utc_now
@@ -20,25 +23,14 @@ _LANGSMITH_CONFIGURED = False
 
 
 def _to_session_service_db_url(database_url: str) -> str:
-    if database_url.startswith("sqlite+aiosqlite:///"):
-        return database_url
     if database_url.startswith("sqlite:///"):
         return database_url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
-    if database_url.startswith("postgresql+asyncpg://"):
-        return database_url
-    if database_url.startswith("postgresql+psycopg://"):
-        return database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
-    if database_url.startswith("postgresql://"):
-        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return database_url
-
-
-def _to_store_db_url(database_url: str) -> str:
     if database_url.startswith("sqlite+aiosqlite:///"):
-        return database_url.replace("sqlite+aiosqlite:///", "sqlite:///", 1)
-    if database_url.startswith("postgresql+asyncpg://"):
-        return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
-    return database_url
+        return database_url
+    raise ValueError(
+        "Only SQLite database URLs are supported for IntakeService right now. "
+        f"Got: {database_url}"
+    )
 
 
 class IntakeService:
@@ -52,10 +44,9 @@ class IntakeService:
     ):
         self.settings = settings or get_settings()
         self.database_url = database_url or self.settings.database_url
-        self.store_database_url = _to_store_db_url(self.database_url)
         self.session_database_url = _to_session_service_db_url(self.database_url)
         self.app_name = app_name
-        self.store = store or ConfirmationStore(self.store_database_url)
+        self.store = store or ConfirmationStore(self.database_url)
         self.session_service = DatabaseSessionService(db_url=self.session_database_url)
         self.runner = Runner(
             agent=self._get_root_agent(),
@@ -81,9 +72,14 @@ class IntakeService:
             user_id=user_id,
             session_id=session_id,
             message=build_triage_message(context),
+            state_delta=build_triage_state_delta(context),
         )
 
-        draft = self._extract_draft(events)
+        session_state = await self._get_session_state(
+            user_id=user_id,
+            session_id=session_id,
+        )
+        draft = self._extract_draft_from_state(session_state)
         interrupt = self._extract_request_input(events)
         confirmation = ConfirmationRecord(
             confirmation_id=str(uuid4()),
@@ -132,10 +128,14 @@ class IntakeService:
                 review_reply,
             ),
         )
+        session_state = await self._get_session_state(
+            user_id=confirmation.user_id,
+            session_id=confirmation.session_id,
+        )
 
         interrupt = self._try_extract_request_input(events)
         if interrupt is not None:
-            draft = self._extract_draft(events)
+            draft = self._extract_draft_from_state(session_state)
             self.store.update_after_resume(
                 confirmation_id=confirmation_id,
                 draft_proposal=draft,
@@ -156,14 +156,16 @@ class IntakeService:
             return IntakeResult(
                 status="approved",
                 confirmation_id=confirmation_id,
-                draft_proposal=confirmation.draft_proposal,
+                draft_proposal=self._try_extract_draft_from_state(session_state)
+                or confirmation.draft_proposal,
             )
         if route == "rejected":
             self.store.mark_rejected(confirmation_id)
             return IntakeResult(
                 status="rejected",
                 confirmation_id=confirmation_id,
-                draft_proposal=confirmation.draft_proposal,
+                draft_proposal=self._try_extract_draft_from_state(session_state)
+                or confirmation.draft_proposal,
             )
 
         raise RuntimeError(
@@ -177,6 +179,7 @@ class IntakeService:
         session_id: str,
         message: types.Content,
         invocation_id: str | None = None,
+        state_delta: dict[str, Any] | None = None,
     ) -> list[Any]:
         events: list[Any] = []
         async for event in self.runner.run_async(
@@ -184,16 +187,46 @@ class IntakeService:
             session_id=session_id,
             invocation_id=invocation_id,
             new_message=message,
+            state_delta=state_delta,
         ):
             events.append(event)
         return events
 
-    def _extract_draft(self, events: list[Any]) -> DraftProposal:
-        for event in reversed(events):
-            state_delta = getattr(event.actions, "state_delta", None) or {}
-            if "draft_proposal" in state_delta:
-                return DraftProposal.model_validate(state_delta["draft_proposal"])
-        raise RuntimeError("No draft_proposal found in workflow events.")
+    async def _get_session_state(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        session = await self.session_service.get_session(
+            app_name=self.app_name,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if session is None:
+            raise RuntimeError(
+                "Session was not found after workflow execution: "
+                f"user_id={user_id}, session_id={session_id}",
+            )
+        return dict(session.state)
+
+    def _extract_draft_from_state(
+        self,
+        session_state: dict[str, Any],
+    ) -> DraftProposal:
+        draft = self._try_extract_draft_from_state(session_state)
+        if draft is None:
+            raise RuntimeError("No draft_proposal found in session state.")
+        return draft
+
+    def _try_extract_draft_from_state(
+        self,
+        session_state: dict[str, Any],
+    ) -> DraftProposal | None:
+        draft_payload = session_state.get("draft_proposal")
+        if draft_payload is None:
+            return None
+        return DraftProposal.model_validate(draft_payload)
 
     def _extract_request_input(self, events: list[Any]) -> dict[str, str]:
         interrupt = self._try_extract_request_input(events)
