@@ -1,7 +1,10 @@
+import os
 from functools import lru_cache
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from backlog_tamer.integrations.telegram.config import TelegramConfig
 
 
 class AgentConfig(BaseSettings):
@@ -11,6 +14,7 @@ class AgentConfig(BaseSettings):
 
 class Settings(BaseSettings):
     agent: AgentConfig
+    telegram: TelegramConfig
 
     database_url: str = "sqlite:///backlog_tamer.db"
 
@@ -25,6 +29,19 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
     )
+
+    def export_to_env(self) -> None:
+        if self.langsmith_api_key is not None:
+            os.environ.setdefault(
+                "LANGSMITH_TRACING",
+                str(self.langsmith_tracing).lower(),
+            )
+            os.environ.setdefault(
+                "LANGSMITH_API_KEY",
+                self.langsmith_api_key.get_secret_value(),
+            )
+            os.environ.setdefault("LANGSMITH_ENDPOINT", self.langsmith_endpoint)
+            os.environ.setdefault("LANGSMITH_PROJECT", self.langsmith_project)
 
 
 @lru_cache(maxsize=1)

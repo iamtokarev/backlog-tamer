@@ -57,7 +57,7 @@ class DraftProposal(BaseModel):
     ]
 
     source_url: str | None = None
-    reasoning: str = Field(min_length=1, max_length=200)
+    reasoning: str = Field(min_length=1)
 
 
 class ReviewDecision(BaseModel):

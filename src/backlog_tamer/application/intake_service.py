@@ -112,6 +112,15 @@ class IntakeService:
         confirmation = self.store.get(confirmation_id)
         if confirmation is None:
             raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
+        if confirmation.status in {
+            ConfirmationStatus.APPROVED,
+            ConfirmationStatus.REJECTED,
+        }:
+            return IntakeResult(
+                status=confirmation.status.value,
+                confirmation_id=confirmation_id,
+                draft_proposal=confirmation.draft_proposal,
+            )
         if confirmation.status is not ConfirmationStatus.PENDING_REVIEW:
             raise ValueError(
                 "Confirmation "
@@ -278,6 +287,7 @@ class IntakeService:
             and self.settings.langsmith_api_key
             and not _LANGSMITH_CONFIGURED
         ):
+            self.settings.export_to_env()
             from langsmith.integrations.google_adk import configure_google_adk
 
             configure_google_adk()

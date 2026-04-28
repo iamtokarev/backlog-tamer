@@ -20,6 +20,7 @@ REVIEW_HISTORY_STATE_KEY = "review_history"
 FETCHED_CONTEXT_STATE_KEY = "fetched_context"
 DRAFT_SNAPSHOT_STATE_KEY = "draft_snapshot"
 
+
 def build_triage_message(context: IncomingContext) -> types.Content:
     """Build the user message passed into the drafting agent."""
     return types.Content(
@@ -34,6 +35,7 @@ def build_triage_state_delta(context: IncomingContext) -> dict[str, object]:
         REVIEW_HISTORY_STATE_KEY: [],
         FETCHED_CONTEXT_STATE_KEY: {},
     }
+
 
 def request_human_review(
     node_input: DraftProposal | dict[str, object],
