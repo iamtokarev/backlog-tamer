@@ -8,3 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Environment vars
+.env
+
+# Jupyter Notebook files
+*.ipynb
+
+# Dev database files
+*.db
