@@ -7,12 +7,13 @@ from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
-from backlog_tamer.agents.intake_triage.schemas import DraftProposal, IncomingContext
+from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
 from backlog_tamer.agents.intake_triage.workflow import (
     build_triage_message,
     build_triage_state_delta,
 )
 from backlog_tamer.config import Settings, get_settings
+from backlog_tamer.integrations.notion import NotionWriter
 
 from .confirmation_store import ConfirmationStore, utc_now
 from .models import ConfirmationRecord, ConfirmationStatus, IntakeResult
@@ -40,6 +41,7 @@ class IntakeService:
         database_url: str | None = None,
         store: ConfirmationStore | None = None,
         settings: Settings | None = None,
+        notion_writer: NotionWriter | None = None,
         app_name: str = APP_NAME,
     ):
         self.settings = settings or get_settings()
@@ -47,6 +49,7 @@ class IntakeService:
         self.session_database_url = _to_session_service_db_url(self.database_url)
         self.app_name = app_name
         self.store = store or ConfirmationStore(self.database_url)
+        self.notion_writer = notion_writer
         self.session_service = DatabaseSessionService(db_url=self.session_database_url)
         self.runner = Runner(
             agent=self._get_root_agent(),
@@ -113,13 +116,16 @@ class IntakeService:
         if confirmation is None:
             raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
         if confirmation.status in {
-            ConfirmationStatus.APPROVED,
+            ConfirmationStatus.COMMITTING,
+            ConfirmationStatus.COMMITTED,
             ConfirmationStatus.REJECTED,
+            ConfirmationStatus.FAILED,
         }:
             return IntakeResult(
                 status=confirmation.status.value,
                 confirmation_id=confirmation_id,
                 draft_proposal=confirmation.draft_proposal,
+                notion_project_url=confirmation.notion_project_url,
             )
         if confirmation.status is not ConfirmationStatus.PENDING_REVIEW:
             raise ValueError(
@@ -161,13 +167,7 @@ class IntakeService:
 
         route = self._extract_route(events)
         if route == "approved":
-            self.store.mark_approved(confirmation_id)
-            return IntakeResult(
-                status="approved",
-                confirmation_id=confirmation_id,
-                draft_proposal=self._try_extract_draft_from_state(session_state)
-                or confirmation.draft_proposal,
-            )
+            return await self.finalize_approval(confirmation_id)
         if route == "rejected":
             self.store.mark_rejected(confirmation_id)
             return IntakeResult(
@@ -179,6 +179,51 @@ class IntakeService:
 
         raise RuntimeError(
             "Workflow resume produced neither a review interrupt nor a final route.",
+        )
+
+    async def finalize_approval(self, confirmation_id: str) -> IntakeResult:
+        confirmation, acquired = self.store.mark_committing_once(confirmation_id)
+        if confirmation.status is ConfirmationStatus.COMMITTED:
+            return IntakeResult(
+                status=ConfirmationStatus.COMMITTED.value,
+                confirmation_id=confirmation_id,
+                draft_proposal=confirmation.draft_proposal,
+                notion_project_url=confirmation.notion_project_url,
+            )
+        if not acquired:
+            return IntakeResult(
+                status=confirmation.status.value,
+                confirmation_id=confirmation_id,
+                draft_proposal=confirmation.draft_proposal,
+                notion_project_url=confirmation.notion_project_url,
+            )
+
+        try:
+            writer = self.notion_writer or NotionWriter.from_settings(self.settings)
+            result = await writer.create_project_with_tasks(confirmation.draft_proposal)
+        except Exception as exc:
+            self.store.mark_failed(
+                confirmation_id=confirmation_id,
+                failure_reason=str(exc),
+            )
+            failed = self.store.get(confirmation_id)
+            return IntakeResult(
+                status=ConfirmationStatus.FAILED.value,
+                confirmation_id=confirmation_id,
+                draft_proposal=confirmation.draft_proposal,
+                notion_project_url=failed.notion_project_url if failed else None,
+            )
+
+        self.store.mark_committed(
+            confirmation_id=confirmation_id,
+            notion_project_id=result.project_id,
+            notion_project_url=result.project_url,
+        )
+        return IntakeResult(
+            status=ConfirmationStatus.COMMITTED.value,
+            confirmation_id=confirmation_id,
+            draft_proposal=confirmation.draft_proposal,
+            notion_project_url=result.project_url,
         )
 
     async def _run_turn(
@@ -222,7 +267,7 @@ class IntakeService:
     def _extract_draft_from_state(
         self,
         session_state: dict[str, Any],
-    ) -> DraftProposal:
+    ) -> ProjectDraft:
         draft = self._try_extract_draft_from_state(session_state)
         if draft is None:
             raise RuntimeError("No draft_proposal found in session state.")
@@ -231,11 +276,11 @@ class IntakeService:
     def _try_extract_draft_from_state(
         self,
         session_state: dict[str, Any],
-    ) -> DraftProposal | None:
+    ) -> ProjectDraft | None:
         draft_payload = session_state.get("draft_proposal")
         if draft_payload is None:
             return None
-        return DraftProposal.model_validate(draft_payload)
+        return ProjectDraft.model_validate(draft_payload)
 
     def _extract_request_input(self, events: list[Any]) -> dict[str, str]:
         interrupt = self._try_extract_request_input(events)

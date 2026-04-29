@@ -89,12 +89,13 @@ async def handle_callback(
         return
 
     status = ConfirmationStatus(result.status)
-    if status is ConfirmationStatus.APPROVED:
-        # TODO: hand off to Notion writer once available.
-        logger.info("Confirmation %s approved (Notion write pending)", confirmation_id)
 
     await query.edit_message_text(
-        render_terminal_message(result.draft_proposal, status),
+        render_terminal_message(
+            result.draft_proposal,
+            status,
+            result.notion_project_url,
+        ),
         parse_mode=ParseMode.MARKDOWN_V2,
     )
 
@@ -168,7 +169,11 @@ async def _handle_revision_text(
 
     status = ConfirmationStatus(result.status)
     await message.reply_text(
-        render_terminal_message(result.draft_proposal, status),
+        render_terminal_message(
+            result.draft_proposal,
+            status,
+            result.notion_project_url,
+        ),
         parse_mode=ParseMode.MARKDOWN_V2,
     )
 

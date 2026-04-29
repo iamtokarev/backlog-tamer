@@ -33,10 +33,9 @@ class FetchedUrl(BaseModel):
     error: str | None = None
 
 
-class DraftProposal(BaseModel):
-    title: str = Field(min_length=1)
-    description: str = Field(min_length=1, max_length=300)
-
+class ProjectDraft(BaseModel):
+    project_name: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=600)
     resource_type: Literal[
         "article",
         "paper",
@@ -47,17 +46,17 @@ class DraftProposal(BaseModel):
         "idea",
         "unknown",
     ]
-
     intent: Literal[
         "learn",
         "build",
         "research",
         "explore",
+        "reference",
         "unclear",
     ]
-
+    priority: Literal["Low", "Medium", "High"]
     source_url: str | None = None
-    reasoning: str = Field(min_length=1)
+    tasks: list[str] = Field(min_length=1, max_length=5)
 
 
 class ReviewDecision(BaseModel):

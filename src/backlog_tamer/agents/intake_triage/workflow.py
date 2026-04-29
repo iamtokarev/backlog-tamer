@@ -11,7 +11,7 @@ from .prompts import (
     build_revision_prompt,
     build_triage_prompt,
 )
-from .schemas import DraftProposal, IncomingContext
+from .schemas import IncomingContext, ProjectDraft
 
 REVIEW_INTERRUPT_ID = "human_review"
 TRIAGE_INPUT_STATE_KEY = "triage_input"
@@ -38,7 +38,7 @@ def build_triage_state_delta(context: IncomingContext) -> dict[str, object]:
 
 
 def request_human_review(
-    node_input: DraftProposal | dict[str, object],
+    node_input: ProjectDraft | dict[str, object],
     fetched_context: dict[str, object] | None = None,
 ):
     draft = _coerce_draft_proposal(node_input)
@@ -87,11 +87,11 @@ def handle_human_review(
 
 
 def _coerce_draft_proposal(
-    draft_proposal: DraftProposal | dict[str, object],
-) -> DraftProposal:
-    if isinstance(draft_proposal, DraftProposal):
+    draft_proposal: ProjectDraft | dict[str, object],
+) -> ProjectDraft:
+    if isinstance(draft_proposal, ProjectDraft):
         return draft_proposal
-    return DraftProposal.model_validate(draft_proposal)
+    return ProjectDraft.model_validate(draft_proposal)
 
 
 def finalize_approval():

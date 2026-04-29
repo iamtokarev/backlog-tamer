@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     telegram: TelegramConfig
 
     database_url: str = "sqlite:///backlog_tamer.db"
+    notion_token: SecretStr | None = None
+    notion_projects_database_id: str
+    notion_tasks_database_id: str
+    notion_api_version: str = "2022-06-28"
 
     langsmith_tracing: bool = True
     langsmith_endpoint: str = "https://eu.api.smith.langchain.com"

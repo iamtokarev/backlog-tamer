@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, String, Text, create_engine
+from sqlalchemy import DateTime, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from backlog_tamer.agents.intake_triage.schemas import DraftProposal, IncomingContext
+from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
 
 from .models import ConfirmationRecord, ConfirmationStatus
 
@@ -44,6 +44,9 @@ class ConfirmationRow(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    notion_project_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notion_project_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ConfirmationStore:
@@ -51,6 +54,7 @@ class ConfirmationStore:
         self.engine = create_engine(database_url)
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)
+        self._ensure_commit_columns()
 
     def create_pending(self, record: ConfirmationRecord) -> None:
         with self.session_factory.begin() as session:
@@ -65,7 +69,7 @@ class ConfirmationStore:
         self,
         *,
         confirmation_id: str,
-        draft_proposal: DraftProposal,
+        draft_proposal: ProjectDraft,
         invocation_id: str,
         request_input_call_id: str,
         review_message: str,
@@ -78,8 +82,52 @@ class ConfirmationStore:
             row.review_message = review_message
             row.updated_at = utc_now()
 
-    def mark_approved(self, confirmation_id: str) -> None:
-        self._mark_completed(confirmation_id, ConfirmationStatus.APPROVED)
+    def mark_committing_once(
+        self,
+        confirmation_id: str,
+    ) -> tuple[ConfirmationRecord, bool]:
+        now = utc_now()
+        with self.session_factory.begin() as session:
+            row = self._get_required_row(session, confirmation_id)
+            if row.status == ConfirmationStatus.PENDING_REVIEW.value:
+                row.status = ConfirmationStatus.COMMITTING.value
+                row.updated_at = now
+                row.failure_reason = None
+                return self._record_from_row(row), True
+            if row.status in {
+                ConfirmationStatus.COMMITTING.value,
+                ConfirmationStatus.COMMITTED.value,
+            }:
+                return self._record_from_row(row), False
+            raise ValueError(
+                "Confirmation "
+                f"{confirmation_id} cannot be committed from status {row.status}."
+            )
+
+    def mark_committed(
+        self,
+        *,
+        confirmation_id: str,
+        notion_project_id: str,
+        notion_project_url: str,
+    ) -> None:
+        now = utc_now()
+        with self.session_factory.begin() as session:
+            row = self._get_required_row(session, confirmation_id)
+            row.status = ConfirmationStatus.COMMITTED.value
+            row.notion_project_id = notion_project_id
+            row.notion_project_url = notion_project_url
+            row.failure_reason = None
+            row.updated_at = now
+            row.resolved_at = now
+
+    def mark_failed(self, *, confirmation_id: str, failure_reason: str) -> None:
+        now = utc_now()
+        with self.session_factory.begin() as session:
+            row = self._get_required_row(session, confirmation_id)
+            row.status = ConfirmationStatus.FAILED.value
+            row.failure_reason = failure_reason
+            row.updated_at = now
 
     def mark_rejected(self, confirmation_id: str) -> None:
         self._mark_completed(confirmation_id, ConfirmationStatus.REJECTED)
@@ -122,6 +170,9 @@ class ConfirmationStore:
             created_at=record.created_at,
             updated_at=record.updated_at,
             resolved_at=record.resolved_at,
+            notion_project_id=record.notion_project_id,
+            notion_project_url=record.notion_project_url,
+            failure_reason=record.failure_reason,
         )
 
     def _record_from_row(self, row: ConfirmationRow) -> ConfirmationRecord:
@@ -137,9 +188,37 @@ class ConfirmationStore:
             incoming_context=IncomingContext.model_validate_json(
                 row.incoming_context_json
             ),
-            draft_proposal=DraftProposal.model_validate_json(row.draft_proposal_json),
+            draft_proposal=ProjectDraft.model_validate_json(row.draft_proposal_json),
             review_message=row.review_message,
             created_at=row.created_at,
             updated_at=row.updated_at,
             resolved_at=row.resolved_at,
+            notion_project_id=row.notion_project_id,
+            notion_project_url=row.notion_project_url,
+            failure_reason=row.failure_reason,
         )
+
+    def _ensure_commit_columns(self) -> None:
+        inspector = inspect(self.engine)
+        columns = {column["name"] for column in inspector.get_columns("confirmations")}
+        additions = {
+            "notion_project_id": "VARCHAR(255)",
+            "notion_project_url": "TEXT",
+            "failure_reason": "TEXT",
+        }
+        missing = [
+            (column_name, column_type)
+            for column_name, column_type in additions.items()
+            if column_name not in columns
+        ]
+        if not missing:
+            return
+
+        with self.engine.begin() as connection:
+            for column_name, column_type in missing:
+                connection.execute(
+                    text(
+                        "ALTER TABLE confirmations "
+                        f"ADD COLUMN {column_name} {column_type}"
+                    )
+                )

@@ -4,7 +4,7 @@ from google.adk.models.lite_llm import LiteLlm
 from backlog_tamer.config import get_settings
 
 from .prompts import INTAKE_TRIAGE_INSTRUCTIONS
-from .schemas import DraftProposal
+from .schemas import ProjectDraft
 from .tools.fetch_url import fetch_url
 from .workflow import build_intake_workflow
 
@@ -25,7 +25,7 @@ draft_agent = Agent(
     model=_get_model(),
     description="Turns messy learning inputs into grounded triage drafts.",
     instruction=INTAKE_TRIAGE_INSTRUCTIONS,
-    output_schema=DraftProposal,
+    output_schema=ProjectDraft,
     output_key="draft_proposal",
     tools=[fetch_url],
 )

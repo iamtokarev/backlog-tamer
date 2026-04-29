@@ -5,13 +5,15 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from backlog_tamer.agents.intake_triage.schemas import DraftProposal, IncomingContext
+from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
 
 
 class ConfirmationStatus(StrEnum):
     PENDING_REVIEW = "pending_review"
-    APPROVED = "approved"
+    COMMITTING = "committing"
+    COMMITTED = "committed"
     REJECTED = "rejected"
+    FAILED = "failed"
 
 
 class ConfirmationRecord(BaseModel):
@@ -24,15 +26,19 @@ class ConfirmationRecord(BaseModel):
     request_input_call_id: str
     status: ConfirmationStatus
     incoming_context: IncomingContext
-    draft_proposal: DraftProposal
+    draft_proposal: ProjectDraft
     review_message: str
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None = None
+    notion_project_id: str | None = None
+    notion_project_url: str | None = None
+    failure_reason: str | None = None
 
 
 class IntakeResult(BaseModel):
     status: str
     confirmation_id: str | None = None
-    draft_proposal: DraftProposal | None = None
+    draft_proposal: ProjectDraft | None = None
     review_message: str | None = None
+    notion_project_url: str | None = None
