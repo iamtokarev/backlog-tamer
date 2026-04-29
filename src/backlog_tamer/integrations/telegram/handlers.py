@@ -19,10 +19,17 @@ from .rendering import (
     render_draft_message,
     render_terminal_message,
 )
+from .state import (
+    get_session_revision,
+    set_session_revision,
+    state_identity_from_update,
+)
 
 logger = logging.getLogger(__name__)
 
 INTAKE_SERVICE_KEY = "intake_service"
+ALLOWED_USER_ID_KEY = "allowed_user_id"
+TELEGRAM_STATE_STORE_KEY = "telegram_state_store"
 AWAITING_REVISION_KEY = "awaiting_revision_for"
 
 ERROR_REPLY = "Something went wrong while triaging this item. Try again."
@@ -39,7 +46,15 @@ async def handle_message(
     if message is None:
         return
 
-    pending_revision = context.user_data.pop(AWAITING_REVISION_KEY, None)
+    identity = state_identity_from_update(update)
+    if identity is None:
+        return
+    user_id, chat_id = identity
+    pending_revision = get_session_revision(
+        context,
+        user_id=user_id,
+        chat_id=chat_id,
+    )
     if pending_revision is not None:
         await _handle_revision_text(update, context, pending_revision)
         return
@@ -54,6 +69,9 @@ async def handle_callback(
     query = update.callback_query
     if query is None or not query.data:
         return
+    if not _is_allowed_user(update, context):
+        await query.answer()
+        return
 
     await query.answer()
 
@@ -66,7 +84,16 @@ async def handle_callback(
     intake_service = _get_intake_service(context)
 
     if action == CALLBACK_REVISE:
-        context.user_data[AWAITING_REVISION_KEY] = confirmation_id
+        identity = state_identity_from_update(update)
+        if identity is None:
+            return
+        user_id, chat_id = identity
+        set_session_revision(
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+            confirmation_id=confirmation_id,
+        )
         await query.message.reply_text(
             REVISION_PROMPT,
             parse_mode=ParseMode.MARKDOWN_V2,
@@ -145,7 +172,15 @@ async def _handle_revision_text(
         await message.reply_text(
             "Please send the revision feedback as text.",
         )
-        context.user_data[AWAITING_REVISION_KEY] = confirmation_id
+        identity = state_identity_from_update(update)
+        if identity is not None:
+            user_id, chat_id = identity
+            set_session_revision(
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                confirmation_id=confirmation_id,
+            )
         return
 
     intake_service = _get_intake_service(context)
@@ -195,3 +230,14 @@ def _get_intake_service(context: ContextTypes.DEFAULT_TYPE) -> IntakeService:
     if intake_service is None:
         raise RuntimeError("IntakeService is not configured in bot_data.")
     return intake_service
+
+
+def _is_allowed_user(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> bool:
+    allowed_user_id = context.bot_data.get(ALLOWED_USER_ID_KEY)
+    user = update.effective_user
+    if allowed_user_id is None or user is None:
+        return True
+    return user.id == allowed_user_id
