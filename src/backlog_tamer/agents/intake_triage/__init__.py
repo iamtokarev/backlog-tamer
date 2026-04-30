@@ -1,1 +1,1 @@
-from . import agent as agent
+"""Intake triage agent package."""

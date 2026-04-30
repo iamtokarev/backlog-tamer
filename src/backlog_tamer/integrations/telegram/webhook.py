@@ -3,10 +3,10 @@ from __future__ import annotations
 import hmac
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from telegram import Update
-from telegram.ext import Application
+if TYPE_CHECKING:
+    from telegram.ext import Application
 
 TELEGRAM_SECRET_HEADER = "x-telegram-bot-api-secret-token"
 
@@ -18,7 +18,7 @@ class WebhookValidationResult:
 
 
 class TelegramUpdateProcessor:
-    def __init__(self, application: Application):
+    def __init__(self, application: "Application"):
         self.application = application
         self._started = False
 
@@ -37,6 +37,8 @@ class TelegramUpdateProcessor:
         self._started = False
 
     async def process_update_payload(self, payload: dict[str, Any]) -> None:
+        from telegram import Update
+
         if not self._started:
             await self.start()
         update = Update.de_json(payload, self.application.bot)
@@ -44,6 +46,8 @@ class TelegramUpdateProcessor:
         await self.application.process_update(update)
 
     async def enqueue_update_payload(self, payload: dict[str, Any]) -> None:
+        from telegram import Update
+
         if not self._started:
             await self.start()
         update = Update.de_json(payload, self.application.bot)
