@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, String, create_engine, text
+from sqlalchemy import DateTime, String, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.pool import NullPool
+
+from backlog_tamer.application.database_urls import to_sync_database_url
 
 
 def utc_now() -> datetime:
@@ -43,7 +47,10 @@ class TelegramUpdateRow(Base):
 
 class TelegramStateStore:
     def __init__(self, database_url: str):
-        self.engine = create_engine(database_url)
+        self.engine = create_engine(
+            to_sync_database_url(database_url),
+            poolclass=NullPool if _uses_external_pooler(database_url) else None,
+        )
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)
 
@@ -86,15 +93,17 @@ class TelegramStateStore:
     def record_update_once(self, update_id: int | str) -> bool:
         now = utc_now()
         update_key = str(update_id)
-        with self.session_factory.begin() as session:
-            inserted = session.execute(
-                text(
-                    "INSERT OR IGNORE INTO telegram_processed_updates "
-                    "(update_id, created_at) VALUES (:update_id, :created_at)"
-                ),
-                {"update_id": update_key, "created_at": now},
-            )
-            return inserted.rowcount == 1
+        try:
+            with self.session_factory.begin() as session:
+                session.add(
+                    TelegramUpdateRow(
+                        update_id=update_key,
+                        created_at=now,
+                    )
+                )
+        except IntegrityError:
+            return False
+        return True
 
     def has_processed_update(self, update_id: int | str) -> bool:
         with self.session_factory() as session:
@@ -136,3 +145,7 @@ def set_session_revision(
         )
         return
     context.user_data["awaiting_revision_for"] = confirmation_id
+
+
+def _uses_external_pooler(database_url: str) -> bool:
+    return "pooler.supabase.com" in database_url

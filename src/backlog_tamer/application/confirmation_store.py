@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
 
+from .database_urls import to_sync_database_url
 from .models import ConfirmationRecord, ConfirmationStatus
 
 
@@ -51,7 +53,10 @@ class ConfirmationRow(Base):
 
 class ConfirmationStore:
     def __init__(self, database_url: str):
-        self.engine = create_engine(database_url)
+        self.engine = create_engine(
+            to_sync_database_url(database_url),
+            poolclass=NullPool if _uses_external_pooler(database_url) else None,
+        )
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)
         self._ensure_commit_columns()
@@ -222,3 +227,7 @@ class ConfirmationStore:
                         f"ADD COLUMN {column_name} {column_type}"
                     )
                 )
+
+
+def _uses_external_pooler(database_url: str) -> bool:
+    return "pooler.supabase.com" in database_url
