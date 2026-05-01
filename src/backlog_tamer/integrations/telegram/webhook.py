@@ -18,7 +18,7 @@ class WebhookValidationResult:
 
 
 class TelegramUpdateProcessor:
-    def __init__(self, application: "Application"):
+    def __init__(self, application: Application):
         self.application = application
         self._started = False
 
@@ -54,7 +54,7 @@ class TelegramUpdateProcessor:
         self._insert_callback_data(update)
         await self.application.update_queue.put(update)
 
-    def _insert_callback_data(self, update: Update) -> None:
+    def _insert_callback_data(self, update: Any) -> None:
         if getattr(self.application.bot, "callback_data_cache", None) is None:
             return
         self.application.bot.insert_callback_data(update)
