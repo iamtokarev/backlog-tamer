@@ -82,6 +82,8 @@ jobs:
           docker buildx build \
             --platform linux/arm64 \
             --tag "$ECR_REPOSITORY_URL:$IMAGE_TAG" \
+            --provenance=false \
+            --sbom=false \
             --push \
             .
 

@@ -42,6 +42,8 @@ echo "Building and pushing $IMAGE_URI for $PLATFORM"
 docker buildx build \
   --platform "$PLATFORM" \
   --tag "$IMAGE_URI" \
+  --provenance=false \
+  --sbom=false \
   --push \
   .
 
