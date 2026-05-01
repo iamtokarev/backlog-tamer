@@ -62,3 +62,14 @@ terraform -chdir=infra/terraform apply
 
 After deployment, register the Telegram webhook to the Lambda Function URL with the configured webhook secret.
 
+Automatic deployment runs from GitHub Actions after CI passes on `main`, and can also be triggered manually from the `Deploy` workflow. It expects a `production` GitHub environment with:
+
+- `AWS_REGION`
+- `AWS_ROLE_ARN`
+- `TF_STATE_BUCKET`
+
+For shared infrastructure state, copy `infra/terraform/backend.hcl.example` to `infra/terraform/backend.hcl`, set your S3 bucket name, then initialize once with:
+
+```sh
+terraform -chdir=infra/terraform init -backend-config=backend.hcl -migrate-state
+```
