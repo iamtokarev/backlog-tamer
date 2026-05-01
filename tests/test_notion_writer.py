@@ -59,9 +59,7 @@ def test_builds_project_payload_normalizes_low_signal_tags():
 
     payload = writer.build_project_payload(draft)
 
-    assert payload["properties"]["Tags"] == {
-        "multi_select": [{"name": "explore"}]
-    }
+    assert payload["properties"]["Tags"] == {"multi_select": [{"name": "explore"}]}
 
 
 def test_builds_task_payload_with_project_relation():

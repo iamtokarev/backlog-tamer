@@ -16,6 +16,7 @@ from backlog_tamer.config import Settings, get_settings
 from backlog_tamer.integrations.notion import NotionWriter
 
 from .confirmation_store import ConfirmationStore, utc_now
+from .database_urls import to_adk_session_database_url
 from .models import ConfirmationRecord, ConfirmationStatus, IntakeResult
 
 APP_NAME = "backlog_tamer"
@@ -24,14 +25,7 @@ _LANGSMITH_CONFIGURED = False
 
 
 def _to_session_service_db_url(database_url: str) -> str:
-    if database_url.startswith("sqlite:///"):
-        return database_url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
-    if database_url.startswith("sqlite+aiosqlite:///"):
-        return database_url
-    raise ValueError(
-        "Only SQLite database URLs are supported for IntakeService right now. "
-        f"Got: {database_url}"
-    )
+    return to_adk_session_database_url(database_url)
 
 
 class IntakeService:

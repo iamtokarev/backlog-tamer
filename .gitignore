@@ -17,3 +17,11 @@ wheels/
 
 # Dev database files
 *.db
+
+# Terraform local state and providers
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+infra/terraform/backend.hcl

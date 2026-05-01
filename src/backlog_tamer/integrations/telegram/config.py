@@ -5,3 +5,4 @@ from pydantic_settings import BaseSettings
 class TelegramConfig(BaseSettings):
     bot_token: SecretStr
     allowed_user_id: int
+    webhook_secret: SecretStr | None = None

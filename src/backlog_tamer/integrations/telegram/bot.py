@@ -13,7 +13,14 @@ from telegram.ext import (
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.config import Settings, get_settings
 
-from .handlers import INTAKE_SERVICE_KEY, handle_callback, handle_message
+from .handlers import (
+    ALLOWED_USER_ID_KEY,
+    INTAKE_SERVICE_KEY,
+    TELEGRAM_STATE_STORE_KEY,
+    handle_callback,
+    handle_message,
+)
+from .state import TelegramStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +28,7 @@ logger = logging.getLogger(__name__)
 def build_application(
     settings: Settings,
     intake_service: IntakeService,
+    state_store: TelegramStateStore | None = None,
 ) -> Application:
     application = (
         ApplicationBuilder()
@@ -28,6 +36,14 @@ def build_application(
         .build()
     )
     application.bot_data[INTAKE_SERVICE_KEY] = intake_service
+    application.bot_data[ALLOWED_USER_ID_KEY] = settings.telegram.allowed_user_id
+    if settings.telegram.webhook_secret is not None:
+        application.bot_data["telegram_webhook_secret"] = (
+            settings.telegram.webhook_secret.get_secret_value()
+        )
+    application.bot_data[TELEGRAM_STATE_STORE_KEY] = state_store or TelegramStateStore(
+        settings.database_url,
+    )
 
     user_filter = filters.User(user_id=settings.telegram.allowed_user_id)
 
