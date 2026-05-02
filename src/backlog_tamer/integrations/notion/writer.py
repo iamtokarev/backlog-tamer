@@ -80,6 +80,7 @@ class NotionWriter:
 
         return {
             "parent": {"database_id": self.projects_database_id},
+            "template": {"type": "default"},
             "properties": {
                 "Project name": _title(draft.project_name),
                 "Status": _status(PROJECT_STATUS),
@@ -98,6 +99,7 @@ class NotionWriter:
     ) -> dict[str, Any]:
         return {
             "parent": {"database_id": self.tasks_database_id},
+            "template": {"type": "default"},
             "properties": {
                 "Task name": _title(task_name),
                 "Status": _status(TASK_STATUS),

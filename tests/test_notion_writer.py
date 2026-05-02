@@ -23,6 +23,7 @@ def test_builds_project_payload_with_summary_source_and_fixed_properties():
     payload = writer.build_project_payload(draft)
 
     assert payload["parent"] == {"database_id": "projects-db"}
+    assert payload["template"] == {"type": "default"}
     properties = payload["properties"]
     assert (
         properties["Project name"]["title"][0]["text"]["content"]
@@ -76,6 +77,7 @@ def test_builds_task_payload_with_project_relation():
     )
 
     assert payload["parent"] == {"database_id": "tasks-db"}
+    assert payload["template"] == {"type": "default"}
     properties = payload["properties"]
     assert properties["Task name"]["title"][0]["text"]["content"] == "Read docs"
     assert properties["Status"] == {"status": {"name": "Not started"}}
