@@ -24,7 +24,11 @@ Rules:
 - Use intent "learn" when the item is mainly study material.
 - Choose priority based on likely urgency and usefulness. Default to
   "Medium" when unclear.
-- Produce 1 to 5 concrete task names. Prefer short actionable tasks.
+- Default to exactly one task, named by intent: use "Read" for articles,
+  papers, and other study material; use "Explore" for repositories and
+  tools.
+- Only produce multiple tasks (up to 5) when the user's note explicitly
+  asks for a breakdown into steps. Prefer short actionable task names.
 - In revision mode, treat the current ProjectDraft as the baseline.
 - In revision mode, preserve fields that are already correct.
 - In revision mode, apply the latest feedback directly and concretely.
