@@ -329,6 +329,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "asyncpg" },
+    { name = "beautifulsoup4" },
     { name = "boto3" },
     { name = "google-adk" },
     { name = "httpx" },
@@ -356,6 +357,7 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
     { name = "asyncpg", specifier = ">=0.31.0" },
+    { name = "beautifulsoup4", specifier = ">=4.14.0" },
     { name = "boto3", specifier = ">=1.42.0" },
     { name = "google-adk", specifier = ">=2.0.0a3" },
     { name = "httpx", specifier = ">=0.28.1" },
