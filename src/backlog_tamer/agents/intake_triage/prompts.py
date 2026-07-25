@@ -15,6 +15,22 @@ Rules:
 - Use `fetch_url` to understand the page, not to copy it.
 - Infer the best possible project_name, summary, resource_type, intent,
   priority, source_url, and tasks.
+- project_name is the backlog title the user will scan weeks later, so make
+  it self-explanatory on its own.
+- Never use a bare repository name, package name, product name, domain, or
+  page title as project_name.
+- Write project_name as a short descriptive phrase of roughly 4 to 10 words
+  that says what the thing is and why it is worth the user's time.
+- When a proper name is recognizable, keep it and add the payoff after it,
+  e.g. "LangGraph: build stateful multi-agent workflows" instead of
+  "langgraph".
+- When the item has no recognizable name, describe its subject instead,
+  e.g. "Vector index tradeoffs for hybrid search" instead of "blog post".
+- Make project_name concrete and specific: prefer the actual topic,
+  technique, or benefit over generic words like "tool", "guide", or
+  "resource".
+- Do not pad project_name with marketing hype or claims the source does not
+  support.
 - resource_type describes what the item is.
 - intent describes what the user likely wants to do with it.
 - Use intent "reference" when the item should be kept mainly for lookup.
@@ -57,6 +73,7 @@ links:
 
 <requirements>
 - infer project_name, summary, resource_type, intent, priority, source_url, and tasks
+- make project_name a descriptive 4-10 word phrase, never a bare repo or page name
 - use fetch_url if the links are useful for grounding
 - keep the result concise and practical
 </requirements>
