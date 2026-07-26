@@ -159,6 +159,8 @@ class IntakeService:
             ConfirmationStatus.COMMITTED,
             ConfirmationStatus.REJECTED,
             ConfirmationStatus.FAILED,
+            ConfirmationStatus.DUPLICATE,
+            ConfirmationStatus.UNDONE,
         }:
             return IntakeResult(
                 status=confirmation.status.value,
@@ -240,8 +242,25 @@ class IntakeService:
                 notion_project_url=confirmation.notion_project_url,
             )
 
+        writer = self.notion_writer or NotionWriter.from_settings(self.settings)
+
+        duplicate = await self._find_duplicate(writer, confirmation)
+        if duplicate is not None:
+            self.store.mark_duplicate(
+                confirmation_id=confirmation_id,
+                notion_project_id=duplicate.page_id,
+                notion_project_url=duplicate.page_url,
+            )
+            return IntakeResult(
+                status=ConfirmationStatus.DUPLICATE.value,
+                confirmation_id=confirmation_id,
+                draft_proposal=confirmation.draft_proposal,
+                grounding=confirmation.grounding,
+                notion_project_url=duplicate.page_url,
+                duplicate_created_time=duplicate.created_time,
+            )
+
         try:
-            writer = self.notion_writer or NotionWriter.from_settings(self.settings)
             result = await writer.create_project_with_tasks(
                 confirmation.draft_proposal,
                 incoming_context=confirmation.incoming_context,
@@ -265,13 +284,81 @@ class IntakeService:
             confirmation_id=confirmation_id,
             notion_project_id=result.project_id,
             notion_project_url=result.project_url,
+            notion_task_ids=result.task_ids,
         )
         return IntakeResult(
             status=ConfirmationStatus.COMMITTED.value,
             confirmation_id=confirmation_id,
             draft_proposal=confirmation.draft_proposal,
+            grounding=confirmation.grounding,
             notion_project_url=result.project_url,
         )
+
+    async def undo_commit(self, confirmation_id: str) -> IntakeResult:
+        """Archive the pages this commit created and release the record."""
+        confirmation = self.store.get(confirmation_id)
+        if confirmation is None:
+            raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
+        if confirmation.status is not ConfirmationStatus.COMMITTED:
+            return IntakeResult(
+                status=confirmation.status.value,
+                confirmation_id=confirmation_id,
+                draft_proposal=confirmation.draft_proposal,
+                notion_project_url=confirmation.notion_project_url,
+            )
+
+        writer = self.notion_writer or NotionWriter.from_settings(self.settings)
+        page_ids = [
+            page_id
+            for page_id in [
+                confirmation.notion_project_id,
+                *confirmation.notion_task_ids,
+            ]
+            if page_id
+        ]
+        await writer.archive_pages(page_ids)
+        self.store.mark_undone(confirmation_id)
+        return IntakeResult(
+            status=ConfirmationStatus.UNDONE.value,
+            confirmation_id=confirmation_id,
+            draft_proposal=confirmation.draft_proposal,
+        )
+
+    async def add_to_existing_project(self, confirmation_id: str) -> IntakeResult:
+        """Attach this draft's tasks to the project the URL already has."""
+        confirmation = self.store.get(confirmation_id)
+        if confirmation is None:
+            raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
+        if confirmation.notion_project_id is None:
+            raise ValueError(f"Confirmation {confirmation_id} has no existing project.")
+
+        writer = self.notion_writer or NotionWriter.from_settings(self.settings)
+        task_ids = await writer.add_tasks_to_project(
+            project_id=confirmation.notion_project_id,
+            draft=confirmation.draft_proposal,
+        )
+        self.store.mark_committed(
+            confirmation_id=confirmation_id,
+            notion_project_id=confirmation.notion_project_id,
+            notion_project_url=confirmation.notion_project_url or "",
+            notion_task_ids=task_ids,
+        )
+        return IntakeResult(
+            status=ConfirmationStatus.COMMITTED.value,
+            confirmation_id=confirmation_id,
+            draft_proposal=confirmation.draft_proposal,
+            grounding=confirmation.grounding,
+            notion_project_url=confirmation.notion_project_url,
+        )
+
+    async def _find_duplicate(self, writer, confirmation: ConfirmationRecord):
+        source_url = (
+            confirmation.grounding.canonical_url
+            or confirmation.draft_proposal.source_url
+        )
+        if not source_url:
+            return None
+        return await writer.find_project_by_source(source_url)
 
     async def _run_turn(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from html import escape
 from urllib.parse import urlparse
 
@@ -19,6 +20,8 @@ CALLBACK_RETRY = "retry"
 CALLBACK_CANCEL = "cancel"
 CALLBACK_EDIT = "edit"
 CALLBACK_REFETCH = "refetch"
+CALLBACK_UNDO = "undo"
+CALLBACK_ADD_TASK = "addtask"
 CALLBACK_PICK = "pick"
 CALLBACK_BACK = "back"
 
@@ -282,29 +285,97 @@ def render_terminal_message(
     status: ConfirmationStatus,
     notion_project_url: str | None = None,
     failure_reason: str | None = None,
+    duplicate_created_time: str | None = None,
 ) -> str:
-    body = render_draft_message(draft)
+    """Once it is resolved the detail lives in Notion, so keep this short.
+
+    The exception is a failed save, where the draft is all the user has left.
+    """
     badge = _terminal_badge(status)
     if status is ConfirmationStatus.FAILED:
-        reason = _short_failure_reason(failure_reason)
-        return f"{badge}\n{reason}\n\n{body}"
-    if notion_project_url:
-        link = _link(notion_project_url, notion_project_url)
-        return f"{badge}\n<b>Notion:</b> {link}\n\n{body}"
-    return f"{badge}\n\n{body}"
+        return (
+            f"{badge}\n{_short_failure_reason(failure_reason)}\n\n"
+            f"{render_draft_message(draft)}"
+        )
+
+    lines = [badge, escape(draft.project_name)]
+
+    if status is ConfirmationStatus.DUPLICATE:
+        saved_on = _format_created_time(duplicate_created_time)
+        since = f" since {escape(saved_on)}" if saved_on else ""
+        lines.append(f"<i>This link is already in your backlog{since}.</i>")
+        return "\n".join(lines)
+
+    if status is ConfirmationStatus.UNDONE:
+        lines.append("<i>Send the item again if you want it back.</i>")
+        return "\n".join(lines)
+
+    lines.append(f"{_render_chips(draft)} · {_task_count(draft)}")
+    return "\n".join(lines)
 
 
-def build_retry_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
+def build_terminal_keyboard(
+    status: ConfirmationStatus,
+    confirmation_id: str,
+    notion_project_url: str | None = None,
+) -> InlineKeyboardMarkup | None:
+    if status is ConfirmationStatus.FAILED:
+        # The draft is still stored, so only the write needs repeating.
+        return InlineKeyboardMarkup(
             [
-                InlineKeyboardButton(
-                    "🔁 Retry save",
-                    callback_data=f"{CALLBACK_RETRY}:{confirmation_id}",
-                )
+                [
+                    InlineKeyboardButton(
+                        "🔁 Retry save",
+                        callback_data=f"{CALLBACK_RETRY}:{confirmation_id}",
+                    )
+                ]
             ]
-        ]
-    )
+        )
+
+    if status is ConfirmationStatus.COMMITTED and notion_project_url:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("↗️ Open in Notion", url=notion_project_url),
+                    InlineKeyboardButton(
+                        "↩️ Undo",
+                        callback_data=f"{CALLBACK_UNDO}:{confirmation_id}",
+                    ),
+                ]
+            ]
+        )
+
+    if status is ConfirmationStatus.DUPLICATE and notion_project_url:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("↗️ Open existing", url=notion_project_url),
+                    InlineKeyboardButton(
+                        "＋ Add task there",
+                        callback_data=f"{CALLBACK_ADD_TASK}:{confirmation_id}",
+                    ),
+                ]
+            ]
+        )
+
+    return None
+
+
+def _task_count(draft: ProjectDraft) -> str:
+    count = len(draft.tasks)
+    return "1 task" if count == 1 else f"{count} tasks"
+
+
+def _format_created_time(created_time: str | None) -> str | None:
+    """Notion returns an ISO timestamp; the date is all that is worth showing."""
+    if not created_time:
+        return None
+    try:
+        return datetime.fromisoformat(created_time.replace("Z", "+00:00")).strftime(
+            "%d %b %Y"
+        )
+    except ValueError:
+        return None
 
 
 def _short_failure_reason(failure_reason: str | None) -> str:
@@ -319,13 +390,17 @@ def _short_failure_reason(failure_reason: str | None) -> str:
 
 def _terminal_badge(status: ConfirmationStatus) -> str:
     if status is ConfirmationStatus.COMMITTED:
-        return "✅ <b>Saved</b>"
+        return "✅ <b>Saved to Notion</b>"
     if status is ConfirmationStatus.COMMITTING:
         return "⏳ <b>Saving</b>"
     if status is ConfirmationStatus.FAILED:
         return "⚠️ <b>Save failed</b>"
     if status is ConfirmationStatus.REJECTED:
         return "❌ <b>Rejected</b>"
+    if status is ConfirmationStatus.DUPLICATE:
+        return "🔁 <b>Already in your backlog</b>"
+    if status is ConfirmationStatus.UNDONE:
+        return "↩️ <b>Removed from Notion</b>"
     return "⏳ <b>Pending</b>"
 
 

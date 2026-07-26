@@ -56,6 +56,7 @@ class ConfirmationRow(Base):
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     manual_edits_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     grounding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notion_task_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ConfirmationStore:
@@ -155,6 +156,7 @@ class ConfirmationStore:
         confirmation_id: str,
         notion_project_id: str,
         notion_project_url: str,
+        notion_task_ids: list[str] | None = None,
     ) -> None:
         now = utc_now()
         with self.session_factory.begin() as session:
@@ -162,9 +164,44 @@ class ConfirmationStore:
             row.status = ConfirmationStatus.COMMITTED.value
             row.notion_project_id = notion_project_id
             row.notion_project_url = notion_project_url
+            row.notion_task_ids_json = json.dumps(notion_task_ids or [])
             row.failure_reason = None
             row.updated_at = now
             row.resolved_at = now
+
+    def mark_duplicate(
+        self,
+        *,
+        confirmation_id: str,
+        notion_project_id: str,
+        notion_project_url: str,
+    ) -> None:
+        """Point the record at the project this URL already has."""
+        now = utc_now()
+        with self.session_factory.begin() as session:
+            row = self._get_required_row(session, confirmation_id)
+            row.status = ConfirmationStatus.DUPLICATE.value
+            row.notion_project_id = notion_project_id
+            row.notion_project_url = notion_project_url
+            row.failure_reason = None
+            row.updated_at = now
+
+    def mark_undone(self, confirmation_id: str) -> ConfirmationRecord:
+        """The pages were archived, so the record no longer points at Notion."""
+        now = utc_now()
+        with self.session_factory.begin() as session:
+            row = self._get_required_row(session, confirmation_id)
+            if row.status != ConfirmationStatus.COMMITTED.value:
+                raise ValueError(
+                    f"Confirmation {confirmation_id} is not committed: {row.status}."
+                )
+            row.status = ConfirmationStatus.UNDONE.value
+            row.notion_project_id = None
+            row.notion_project_url = None
+            row.notion_task_ids_json = None
+            row.updated_at = now
+            row.resolved_at = now
+            return self._record_from_row(row)
 
     def mark_failed(self, *, confirmation_id: str, failure_reason: str) -> None:
         now = utc_now()
@@ -222,6 +259,9 @@ class ConfirmationStore:
             if record.manual_edits
             else None,
             grounding_json=record.grounding.model_dump_json(),
+            notion_task_ids_json=json.dumps(record.notion_task_ids)
+            if record.notion_task_ids
+            else None,
         )
 
     def _record_from_row(self, row: ConfirmationRow) -> ConfirmationRecord:
@@ -247,6 +287,7 @@ class ConfirmationStore:
             failure_reason=row.failure_reason,
             manual_edits=_load_manual_edits(row.manual_edits_json),
             grounding=_load_grounding(row.grounding_json),
+            notion_task_ids=_load_task_ids(row.notion_task_ids_json),
         )
 
     def _ensure_commit_columns(self) -> None:
@@ -258,6 +299,7 @@ class ConfirmationStore:
             "failure_reason": "TEXT",
             "manual_edits_json": "TEXT",
             "grounding_json": "TEXT",
+            "notion_task_ids_json": "TEXT",
         }
         missing = [
             (column_name, column_type)
@@ -275,6 +317,16 @@ class ConfirmationStore:
                         f"ADD COLUMN {column_name} {column_type}"
                     )
                 )
+
+
+def _load_task_ids(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
 def _load_grounding(raw: str | None) -> DraftGrounding:

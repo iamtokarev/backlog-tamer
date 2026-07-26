@@ -13,6 +13,7 @@ from backlog_tamer.application.models import ConfirmationStatus, IntakeResult
 
 from .parsing import build_incoming_context
 from .rendering import (
+    CALLBACK_ADD_TASK,
     CALLBACK_APPROVE,
     CALLBACK_BACK,
     CALLBACK_CANCEL,
@@ -22,12 +23,13 @@ from .rendering import (
     CALLBACK_REJECT,
     CALLBACK_RETRY,
     CALLBACK_REVISE,
+    CALLBACK_UNDO,
     DRAFT_FIELD_NAMES,
     REVISION_PLACEHOLDER,
     build_cancel_revision_keyboard,
     build_picker_keyboard,
-    build_retry_keyboard,
     build_review_keyboard,
+    build_terminal_keyboard,
     render_change_summary,
     render_draft_message,
     render_progress_message,
@@ -58,6 +60,8 @@ UNKNOWN_CONFIRMATION_REPLY = (
 )
 REVISING_MESSAGE = "✍️ Revising the draft…"
 SAVING_MESSAGE = "⏳ Saving to Notion…"
+UNDOING_MESSAGE = "↩️ Removing it from Notion…"
+ADDING_TASK_MESSAGE = "＋ Adding the task to the existing project…"
 REFETCHING_MESSAGE = "🔎 Opening the page again…"
 REFETCH_FEEDBACK = (
     "The page fetch failed last time. Fetch the source URL again and redraft "
@@ -170,17 +174,34 @@ async def handle_callback(
         await _handle_refetch(query, intake_service, confirmation_id)
         return
 
-    if action not in {CALLBACK_APPROVE, CALLBACK_REJECT, CALLBACK_RETRY}:
+    if action not in {
+        CALLBACK_APPROVE,
+        CALLBACK_REJECT,
+        CALLBACK_RETRY,
+        CALLBACK_UNDO,
+        CALLBACK_ADD_TASK,
+    }:
         logger.warning("Unknown callback action: %r", action)
         return
 
-    if action in {CALLBACK_APPROVE, CALLBACK_RETRY}:
-        # Drops the keyboard too, so the button cannot be pressed twice.
-        await query.edit_message_text(SAVING_MESSAGE, parse_mode=ParseMode.HTML)
+    # Each of these edits the card first, which also drops the keyboard so the
+    # button cannot be pressed twice while the write is in flight.
+    pending_message = {
+        CALLBACK_APPROVE: SAVING_MESSAGE,
+        CALLBACK_RETRY: SAVING_MESSAGE,
+        CALLBACK_UNDO: UNDOING_MESSAGE,
+        CALLBACK_ADD_TASK: ADDING_TASK_MESSAGE,
+    }.get(action)
+    if pending_message is not None:
+        await query.edit_message_text(pending_message, parse_mode=ParseMode.HTML)
 
     try:
         if action == CALLBACK_RETRY:
             result = await intake_service.finalize_approval(confirmation_id)
+        elif action == CALLBACK_UNDO:
+            result = await intake_service.undo_commit(confirmation_id)
+        elif action == CALLBACK_ADD_TASK:
+            result = await intake_service.add_to_existing_project(confirmation_id)
         else:
             result = await intake_service.resume_intake(confirmation_id, action)
     except ValueError:
@@ -416,14 +437,16 @@ def _terminal_text(result: IntakeResult) -> str:
         ConfirmationStatus(result.status),
         result.notion_project_url,
         result.failure_reason,
+        result.duplicate_created_time,
     )
 
 
 def _terminal_keyboard(result: IntakeResult):
-    """A failed Notion write keeps the draft, so offer the write again."""
-    if ConfirmationStatus(result.status) is not ConfirmationStatus.FAILED:
-        return None
-    return build_retry_keyboard(result.confirmation_id)
+    return build_terminal_keyboard(
+        ConfirmationStatus(result.status),
+        result.confirmation_id,
+        result.notion_project_url,
+    )
 
 
 def _get_intake_service(context: ContextTypes.DEFAULT_TYPE) -> IntakeService:

@@ -18,6 +18,8 @@ class ConfirmationStatus(StrEnum):
     COMMITTED = "committed"
     REJECTED = "rejected"
     FAILED = "failed"
+    UNDONE = "undone"
+    DUPLICATE = "duplicate"
 
 
 class ConfirmationRecord(BaseModel):
@@ -41,6 +43,7 @@ class ConfirmationRecord(BaseModel):
     resolved_at: datetime | None = None
     notion_project_id: str | None = None
     notion_project_url: str | None = None
+    notion_task_ids: list[str] = []
     failure_reason: str | None = None
 
 
@@ -51,4 +54,5 @@ class IntakeResult(BaseModel):
     grounding: DraftGrounding = DraftGrounding()
     review_message: str | None = None
     notion_project_url: str | None = None
+    duplicate_created_time: str | None = None
     failure_reason: str | None = None

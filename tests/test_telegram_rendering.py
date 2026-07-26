@@ -7,6 +7,7 @@ from backlog_tamer.agents.intake_triage.schemas import (
 )
 from backlog_tamer.application.models import ConfirmationStatus
 from backlog_tamer.integrations.telegram.rendering import (
+    build_terminal_keyboard,
     render_change_summary,
     render_draft_message,
     render_progress_message,
@@ -145,12 +146,70 @@ def test_revision_prompt_names_the_draft_being_revised():
     assert "Cancel" in prompt
 
 
-def test_terminal_message_shows_status_badge_and_notion_link():
+def test_committed_message_is_compact_and_links_out_via_a_button():
     message = render_terminal_message(
         _draft(),
         ConfirmationStatus.COMMITTED,
         "https://notion.so/project-id",
     )
+    keyboard = build_terminal_keyboard(
+        ConfirmationStatus.COMMITTED,
+        "confirmation-id",
+        "https://notion.so/project-id",
+    )
 
-    assert "✅ <b>Saved</b>" in message
-    assert 'href="https://notion.so/project-id"' in message
+    assert "✅ <b>Saved to Notion</b>" in message
+    assert "LangGraph: build stateful multi-agent workflows" in message
+    assert "1 task" in message
+    # The whole draft is no longer repeated once it lives in Notion.
+    assert "Graph of stateful nodes" not in message
+    assert "notion.so" not in message
+
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+    assert buttons[0].url == "https://notion.so/project-id"
+    assert buttons[1].callback_data == "undo:confirmation-id"
+
+
+def test_duplicate_message_says_when_it_was_first_saved():
+    message = render_terminal_message(
+        _draft(),
+        ConfirmationStatus.DUPLICATE,
+        "https://notion.so/existing",
+        duplicate_created_time="2026-06-04T09:12:00.000Z",
+    )
+    keyboard = build_terminal_keyboard(
+        ConfirmationStatus.DUPLICATE,
+        "confirmation-id",
+        "https://notion.so/existing",
+    )
+    actions = [
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+
+    assert "🔁 <b>Already in your backlog</b>" in message
+    assert "since 04 Jun 2026" in message
+    assert actions == ["addtask:confirmation-id"]
+
+
+def test_failed_message_keeps_the_whole_draft_and_a_retry_button():
+    message = render_terminal_message(
+        _draft(),
+        ConfirmationStatus.FAILED,
+        failure_reason="Server error '502 Bad Gateway'",
+    )
+    keyboard = build_terminal_keyboard(ConfirmationStatus.FAILED, "confirmation-id")
+
+    assert "502 Bad Gateway" in message
+    assert "Graph of stateful nodes" in message
+    assert keyboard.inline_keyboard[0][0].callback_data == "retry:confirmation-id"
+
+
+def test_undone_message_tells_the_user_how_to_get_it_back():
+    message = render_terminal_message(_draft(), ConfirmationStatus.UNDONE)
+
+    assert "↩️ <b>Removed from Notion</b>" in message
+    assert "Send the item again" in message
+    assert build_terminal_keyboard(ConfirmationStatus.UNDONE, "confirmation-id") is None

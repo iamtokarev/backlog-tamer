@@ -77,6 +77,13 @@ class NotionCommitResult:
 
 
 @dataclass(frozen=True)
+class ExistingProject:
+    page_id: str
+    page_url: str
+    created_time: str | None = None
+
+
+@dataclass(frozen=True)
 class NotionSchemaReport:
     missing_project_properties: list[str]
     missing_task_properties: list[str]
@@ -220,6 +227,85 @@ class NotionWriter:
             "template": {"type": "default"},
             "properties": properties,
         }
+
+    async def find_project_by_source(self, source_url: str) -> ExistingProject | None:
+        """Look for a project already saved from this URL.
+
+        Nothing else stops the same link becoming three projects, which is
+        exactly how the backlog turns back into an inbox.
+        """
+        async with self._session() as client:
+            known = await self._known_properties(client, self.projects_database_id)
+            if known is not None and PROJECT_SOURCE_PROPERTY not in known:
+                return None
+
+            try:
+                response = await client.post(
+                    f"{NOTION_API_BASE_URL}/databases/"
+                    f"{self.projects_database_id}/query",
+                    headers=self._headers(),
+                    json={
+                        "filter": {
+                            "property": PROJECT_SOURCE_PROPERTY,
+                            "url": {"equals": source_url},
+                        },
+                        "page_size": 1,
+                    },
+                )
+                response.raise_for_status()
+                results = response.json().get("results") or []
+            except Exception:
+                # A duplicate check is a convenience; never block the commit.
+                logger.warning("Duplicate lookup failed for %s.", source_url)
+                return None
+
+        if not results:
+            return None
+        return ExistingProject(
+            page_id=_require_text(results[0], "id"),
+            page_url=_require_text(results[0], "url"),
+            created_time=results[0].get("created_time"),
+        )
+
+    async def add_tasks_to_project(
+        self,
+        *,
+        project_id: str,
+        draft: ProjectDraft,
+    ) -> list[str]:
+        """Attach this draft's tasks to a project that already exists."""
+        async with self._session() as client:
+            payloads = [
+                await self._fit_to_schema(
+                    client,
+                    self.tasks_database_id,
+                    self.build_task_payload(
+                        task_name=task_name,
+                        priority=draft.priority,
+                        project_id=project_id,
+                        source_url=draft.source_url,
+                    ),
+                )
+                for task_name in draft.tasks
+            ]
+            tasks = await asyncio.gather(
+                *(self._post_page(client, payload) for payload in payloads)
+            )
+        return [_require_text(task, "id") for task in tasks]
+
+    async def archive_pages(self, page_ids: list[str]) -> None:
+        """Undo a commit. Notion archives pages rather than deleting them."""
+        async with self._session() as client:
+            await asyncio.gather(
+                *(
+                    client.patch(
+                        f"{NOTION_API_BASE_URL}/pages/{page_id}",
+                        headers=self._headers(),
+                        json={"archived": True},
+                    )
+                    for page_id in page_ids
+                )
+            )
 
     async def _fit_to_schema(
         self,
