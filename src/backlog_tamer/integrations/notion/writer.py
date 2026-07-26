@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
 from backlog_tamer.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -109,11 +109,12 @@ class NotionWriter:
     async def create_project_with_tasks(
         self,
         draft: ProjectDraft,
+        incoming_context: IncomingContext | None = None,
     ) -> NotionCommitResult:
         async with self._session() as client:
             payload = await self._fit_to_schema(
                 client,
-                self.build_project_payload(draft),
+                self.build_project_payload(draft, incoming_context=incoming_context),
             )
             project = await self._post_page(client, payload)
             project_id = _require_text(project, "id")
@@ -143,7 +144,9 @@ class NotionWriter:
         self,
         draft: ProjectDraft,
         captured_at: date | None = None,
+        incoming_context: IncomingContext | None = None,
     ) -> dict[str, Any]:
+        captured_on = captured_at or date.today()
         properties: dict[str, Any] = {
             PROJECT_NAME_PROPERTY: _title(draft.project_name),
             PROJECT_STATUS_PROPERTY: _status(PROJECT_STATUS),
@@ -151,7 +154,7 @@ class NotionWriter:
             PROJECT_TYPE_PROPERTY: _select(draft.resource_type),
             PROJECT_INTENT_PROPERTY: _select(draft.intent),
             PROJECT_TAGS_PROPERTY: {"multi_select": _draft_tags(draft)},
-            PROJECT_CAPTURED_PROPERTY: _date(captured_at or date.today()),
+            PROJECT_CAPTURED_PROPERTY: _date(captured_on),
             PROJECT_SUMMARY_PROPERTY: _rich_text(draft.summary),
         }
         if draft.source_url:
@@ -162,6 +165,11 @@ class NotionWriter:
             "template": {"type": "default"},
             "icon": _emoji(RESOURCE_TYPE_EMOJI.get(draft.resource_type, "❔")),
             "properties": properties,
+            "children": build_project_children(
+                draft,
+                incoming_context=incoming_context,
+                captured_on=captured_on,
+            ),
         }
 
     def build_task_payload(
@@ -319,6 +327,106 @@ class NotionWriter:
             "Content-Type": "application/json",
             "Notion-Version": self.api_version,
         }
+
+
+def build_project_children(
+    draft: ProjectDraft,
+    *,
+    incoming_context: IncomingContext | None = None,
+    captured_on: date | None = None,
+) -> list[dict[str, Any]]:
+    """The page body.
+
+    Without this a link-shaped item lands as a database row with an empty
+    page, which is the "another inbox" failure mode the product is meant to
+    prevent.
+    """
+    children: list[dict[str, Any]] = []
+
+    if draft.source_url:
+        children.append(
+            {
+                "object": "block",
+                "type": "bookmark",
+                "bookmark": {"url": draft.source_url},
+            }
+        )
+
+    note = _capture_note(incoming_context, draft.source_url)
+    if note:
+        children.append(_heading("Why I saved this"))
+        children.append(_paragraph(note))
+
+    if draft.tasks:
+        children.append(_heading("Next action"))
+        children.extend(_to_do(task) for task in draft.tasks)
+
+    children.append(
+        _callout(
+            "🤖",
+            f"Captured via Telegram on {(captured_on or date.today()).isoformat()} · "
+            f"drafted by intake_triage",
+        )
+    )
+    return children
+
+
+def _capture_note(
+    incoming_context: IncomingContext | None,
+    source_url: str | None,
+) -> str | None:
+    """The user's own words, which recall the item better than a summary."""
+    if incoming_context is None:
+        return None
+    note = (incoming_context.note or "").strip()
+    if not note:
+        raw = incoming_context.raw_text.strip()
+        note = "" if raw == (source_url or "").strip() else raw
+    return note or None
+
+
+def _heading(text: str) -> dict[str, Any]:
+    return {
+        "object": "block",
+        "type": "heading_3",
+        "heading_3": {"rich_text": _text_fragments(text)},
+    }
+
+
+def _paragraph(text: str) -> dict[str, Any]:
+    return {
+        "object": "block",
+        "type": "paragraph",
+        "paragraph": {"rich_text": _text_fragments(text)},
+    }
+
+
+def _to_do(text: str) -> dict[str, Any]:
+    return {
+        "object": "block",
+        "type": "to_do",
+        "to_do": {"rich_text": _text_fragments(text), "checked": False},
+    }
+
+
+def _callout(emoji: str, text: str) -> dict[str, Any]:
+    return {
+        "object": "block",
+        "type": "callout",
+        "callout": {
+            "rich_text": _text_fragments(text),
+            "icon": _emoji(emoji),
+        },
+    }
+
+
+def _text_fragments(value: str) -> list[dict[str, Any]]:
+    """Notion rejects any single text fragment over 2000 characters."""
+    limit = 2000
+    return [
+        {"type": "text", "text": {"content": value[index : index + limit]}}
+        for index in range(0, max(len(value), 1), limit)
+    ]
 
 
 def _date(value: date) -> dict[str, Any]:

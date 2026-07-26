@@ -211,7 +211,10 @@ class IntakeService:
 
         try:
             writer = self.notion_writer or NotionWriter.from_settings(self.settings)
-            result = await writer.create_project_with_tasks(confirmation.draft_proposal)
+            result = await writer.create_project_with_tasks(
+                confirmation.draft_proposal,
+                incoming_context=confirmation.incoming_context,
+            )
         except Exception as exc:
             self.store.mark_failed(
                 confirmation_id=confirmation_id,

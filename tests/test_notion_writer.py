@@ -4,7 +4,11 @@ import asyncio
 from datetime import date
 from typing import Any
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    IncomingContext,
+    ProjectDraft,
+    SourceLink,
+)
 from backlog_tamer.integrations.notion.writer import NotionWriter
 
 
@@ -363,3 +367,106 @@ def test_schema_report_separates_renamed_columns_from_not_yet_added_ones():
         "Source",
         "Type",
     ]
+
+
+def _children_of(payload: dict[str, Any], block_type: str) -> list[dict[str, Any]]:
+    return [block for block in payload["children"] if block["type"] == block_type]
+
+
+def _plain_text(block: dict[str, Any]) -> str:
+    return "".join(
+        fragment["text"]["content"] for fragment in block[block["type"]]["rich_text"]
+    )
+
+
+def test_page_body_bookmarks_the_source_and_keeps_the_original_note():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+    draft = ProjectDraft(
+        project_name="LangGraph: build stateful multi-agent workflows",
+        summary="Graph of stateful nodes.",
+        resource_type="documentation",
+        intent="build",
+        priority="High",
+        source_url="https://blog.langchain.com/langgraph/",
+        tasks=["Explore"],
+    )
+    context = IncomingContext(
+        raw_text="https://blog.langchain.com/langgraph/ want to try this for intake",
+        note="want to try this for intake",
+        links=[SourceLink(url="https://blog.langchain.com/langgraph/")],
+    )
+
+    payload = writer.build_project_payload(
+        draft,
+        captured_at=date(2026, 7, 26),
+        incoming_context=context,
+    )
+
+    bookmarks = _children_of(payload, "bookmark")
+    assert bookmarks[0]["bookmark"]["url"] == "https://blog.langchain.com/langgraph/"
+
+    paragraphs = [_plain_text(block) for block in _children_of(payload, "paragraph")]
+    assert "want to try this for intake" in paragraphs
+
+    todos = [_plain_text(block) for block in _children_of(payload, "to_do")]
+    assert todos == ["Explore"]
+
+    callout = _plain_text(_children_of(payload, "callout")[0])
+    assert "2026-07-26" in callout
+
+
+def test_page_body_skips_the_note_when_the_message_was_only_a_link():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+    draft = ProjectDraft(
+        project_name="Example",
+        summary="Example summary.",
+        resource_type="article",
+        intent="learn",
+        priority="Low",
+        source_url="https://example.com",
+        tasks=["Read"],
+    )
+    context = IncomingContext(
+        raw_text="https://example.com",
+        links=[SourceLink(url="https://example.com")],
+    )
+
+    payload = writer.build_project_payload(draft, incoming_context=context)
+
+    assert _children_of(payload, "paragraph") == []
+    assert "Why I saved this" not in [
+        _plain_text(block) for block in _children_of(payload, "heading_3")
+    ]
+
+
+def test_page_body_splits_text_over_the_notion_fragment_limit():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+    draft = ProjectDraft(
+        project_name="Example",
+        summary="Example summary.",
+        resource_type="idea",
+        intent="build",
+        priority="Low",
+        tasks=["Sketch"],
+    )
+    context = IncomingContext(raw_text="x" * 4500, note="x" * 4500)
+
+    payload = writer.build_project_payload(draft, incoming_context=context)
+
+    paragraph = _children_of(payload, "paragraph")[0]
+    fragments = paragraph["paragraph"]["rich_text"]
+    assert len(fragments) == 3
+    assert all(len(f["text"]["content"]) <= 2000 for f in fragments)
+    assert _plain_text(paragraph) == "x" * 4500

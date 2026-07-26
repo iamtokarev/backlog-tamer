@@ -16,12 +16,15 @@ class FakeNotionWriter:
     def __init__(self, *, fail: bool = False):
         self.fail = fail
         self.calls: list[ProjectDraft] = []
+        self.contexts: list[IncomingContext | None] = []
 
     async def create_project_with_tasks(
         self,
         draft: ProjectDraft,
+        incoming_context: IncomingContext | None = None,
     ) -> NotionCommitResult:
         self.calls.append(draft)
+        self.contexts.append(incoming_context)
         if self.fail:
             raise RuntimeError("notion unavailable")
         return NotionCommitResult(
