@@ -152,6 +152,10 @@ def render_draft_message(
         lines.append("")
         lines.extend(f"☑︎ {escape(task)}" for task in draft.tasks)
 
+    if draft.topics:
+        lines.append("")
+        lines.append(f"🏷 {escape(' · '.join(draft.topics))}")
+
     if grounding is not None and grounding.is_degraded:
         lines.append("")
         lines.append(_render_fetch_warning(grounding))

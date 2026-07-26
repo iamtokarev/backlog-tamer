@@ -76,6 +76,7 @@ class ProjectDraft(BaseModel):
     ]
     priority: Literal["Low", "Medium", "High"]
     source_url: str | None = None
+    topics: list[str] = Field(default_factory=list, max_length=3)
     tasks: list[str] = Field(default_factory=list)
 
 

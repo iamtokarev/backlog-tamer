@@ -478,11 +478,30 @@ def _status(value: str) -> dict[str, Any]:
 
 
 def _draft_tags(draft: ProjectDraft) -> list[dict[str, str]]:
+    """Tags carry topics now that Type and Intent are their own properties.
+
+    Drafts written before topics existed fall back to the old behaviour so
+    their tags do not come out empty.
+    """
+    if draft.topics:
+        return [{"name": topic} for topic in _normalized_topics(draft.topics)]
+
     tags: list[str] = []
     if draft.resource_type != "unknown":
         tags.append(draft.resource_type)
     tags.append("explore" if draft.intent == "unclear" else draft.intent)
     return [{"name": tag} for tag in tags]
+
+
+def _normalized_topics(topics: list[str]) -> list[str]:
+    """Lowercase, de-duplicated, and free of the commas Notion splits on."""
+    seen: list[str] = []
+    for topic in topics:
+        cleaned = topic.strip().lower().replace(",", " ")
+        cleaned = " ".join(cleaned.split())
+        if cleaned and cleaned not in seen:
+            seen.append(cleaned)
+    return seen[:3]
 
 
 def _require_text(payload: dict[str, Any], key: str) -> str:

@@ -470,3 +470,51 @@ def test_page_body_splits_text_over_the_notion_fragment_limit():
     assert len(fragments) == 3
     assert all(len(f["text"]["content"]) <= 2000 for f in fragments)
     assert _plain_text(paragraph) == "x" * 4500
+
+
+def test_tags_carry_topics_when_the_draft_has_them():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+    draft = ProjectDraft(
+        project_name="LangGraph: build stateful multi-agent workflows",
+        summary="Graph of stateful nodes.",
+        resource_type="documentation",
+        intent="build",
+        priority="High",
+        topics=["LangGraph", "Multi-Agent", "orchestration"],
+        tasks=["Explore"],
+    )
+
+    payload = writer.build_project_payload(draft)
+
+    assert payload["properties"]["Tags"] == {
+        "multi_select": [
+            {"name": "langgraph"},
+            {"name": "multi-agent"},
+            {"name": "orchestration"},
+        ]
+    }
+
+
+def test_topic_tags_drop_duplicates_and_commas():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+    draft = ProjectDraft(
+        project_name="Example",
+        summary="Example summary.",
+        resource_type="article",
+        intent="learn",
+        priority="Low",
+        topics=["rag", "RAG", "vector, search"],
+        tasks=["Read"],
+    )
+
+    assert writer.build_project_payload(draft)["properties"]["Tags"] == {
+        "multi_select": [{"name": "rag"}, {"name": "vector search"}]
+    }
