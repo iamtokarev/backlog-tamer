@@ -131,7 +131,15 @@ jobs:
       # runtime) and reports the version it is running.
       - name: Smoke test worker
         run: |
-          expected="${VERSION#v}"
+          # Read the expected version from the checked-out release rather than
+          # parsing it out of the tag: the tag format is release-please's to
+          # decide, but pyproject.toml is what gets baked into the image.
+          expected="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)"
+          if [ -z "$expected" ]; then
+            echo "::error::Could not read version from pyproject.toml at $VERSION"
+            exit 1
+          fi
+
           error="$(aws lambda invoke \
             --function-name "$WORKER_FUNCTION" \
             --cli-binary-format raw-in-base64-out \
