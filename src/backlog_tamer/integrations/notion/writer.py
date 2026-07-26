@@ -12,6 +12,17 @@ NOTION_API_BASE_URL = "https://api.notion.com/v1"
 PROJECT_STATUS = "Backlog"
 TASK_STATUS = "Not started"
 
+RESOURCE_TYPE_EMOJI = {
+    "article": "📄",
+    "paper": "🧪",
+    "video": "🎬",
+    "course": "🎓",
+    "documentation": "📘",
+    "repository": "📦",
+    "idea": "💡",
+    "unknown": "❔",
+}
+
 
 @dataclass(frozen=True)
 class NotionCommitResult:
@@ -81,6 +92,7 @@ class NotionWriter:
         return {
             "parent": {"database_id": self.projects_database_id},
             "template": {"type": "default"},
+            "icon": _emoji(RESOURCE_TYPE_EMOJI.get(draft.resource_type, "❔")),
             "properties": {
                 "Project name": _title(draft.project_name),
                 "Status": _status(PROJECT_STATUS),
@@ -133,6 +145,10 @@ class NotionWriter:
             "Content-Type": "application/json",
             "Notion-Version": self.api_version,
         }
+
+
+def _emoji(value: str) -> dict[str, Any]:
+    return {"type": "emoji", "emoji": value}
 
 
 def _title(value: str) -> dict[str, Any]:

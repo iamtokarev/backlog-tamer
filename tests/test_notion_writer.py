@@ -61,6 +61,36 @@ def test_builds_project_payload_normalizes_low_signal_tags():
     payload = writer.build_project_payload(draft)
 
     assert payload["properties"]["Tags"] == {"multi_select": [{"name": "explore"}]}
+    assert payload["icon"] == {"type": "emoji", "emoji": "❔"}
+
+
+def test_project_page_icon_follows_the_resource_type():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+
+    icons = {
+        resource_type: writer.build_project_payload(
+            ProjectDraft(
+                project_name="Example",
+                summary="Example summary.",
+                resource_type=resource_type,
+                intent="learn",
+                priority="Low",
+                tasks=["Read"],
+            )
+        )["icon"]["emoji"]
+        for resource_type in ("article", "video", "repository", "documentation")
+    }
+
+    assert icons == {
+        "article": "📄",
+        "video": "🎬",
+        "repository": "📦",
+        "documentation": "📘",
+    }
 
 
 def test_builds_task_payload_with_project_relation():
