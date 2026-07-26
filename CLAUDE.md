@@ -43,6 +43,28 @@ The image is already in ECR, so the build is skipped and only `terraform apply` 
 
 `bootstrap-sha` in `release-please-config.json` is the history boundary for the first release (the repo had no `v*` tags). It can be dropped once `v0.2.0` exists.
 
+## Notion database schema
+
+Property names live in `integrations/notion/writer.py` as module constants —
+rename a column in Notion and it is a one-line change there.
+
+Required (the deploy healthcheck fails without them):
+
+- **Projects**: `Project name` (title), `Status`, `Priority`, `Tags` (multi-select), `Summary` (rich text)
+- **Tasks**: `Task name` (title), `Status`, `Priority`, `Projects` (relation)
+
+Optional, listed in `OPTIONAL_PROJECT_PROPERTIES` / `OPTIONAL_TASK_PROPERTIES`.
+The writer reads each database's schema once and silently drops properties that
+do not exist, so these can be added whenever — until then the feature is just
+absent:
+
+- **Projects**: `Source` (url), `Type` (select), `Intent` (select), `Captured` (date)
+- **Tasks**: `Due` (date), `Source` (url)
+
+Duplicate detection queries Projects by `Source`, so without that column every
+send creates a new project. `worker_handler` with `{"healthcheck": true}`
+reports which optional properties are being skipped.
+
 ## Architecture
 
 Three layers under `src/backlog_tamer/`:

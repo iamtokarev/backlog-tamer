@@ -7,7 +7,11 @@ from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.agents.intake_triage.workflow import (
     build_triage_message,
     build_triage_state_delta,
@@ -21,11 +25,49 @@ from .models import ConfirmationRecord, ConfirmationStatus, IntakeResult
 
 APP_NAME = "backlog_tamer"
 REQUEST_INPUT_TOOL_NAME = "adk_request_input"
+FETCHED_CONTEXT_STATE_KEY = "fetched_context"
+MAX_GROUNDING_KEY_POINTS = 4
 _LANGSMITH_CONFIGURED = False
 
 
 def _to_session_service_db_url(database_url: str) -> str:
     return to_adk_session_database_url(database_url)
+
+
+def _match_fetched_entry(
+    fetched: dict[str, Any],
+    source_url: str | None,
+) -> Any:
+    """Prefer the entry for the draft's own source, else the first fetch."""
+    if source_url:
+        for key, payload in fetched.items():
+            if key == source_url:
+                return payload
+        for payload in fetched.values():
+            if isinstance(payload, dict) and source_url in {
+                payload.get("final_url"),
+                payload.get("canonical_url"),
+                payload.get("requested_url"),
+            }:
+                return payload
+    return next(iter(fetched.values()), None)
+
+
+def _with_manual_edits(review_reply: str, manual_edits: dict[str, str]) -> str:
+    """Tell the agent which fields the user already fixed with the buttons.
+
+    Quick edits patch the stored draft only; the workflow session still holds
+    the agent's own last draft, so without this the next revision would
+    silently undo them.
+    """
+    if not manual_edits or review_reply in {"approve", "reject"}:
+        return review_reply
+
+    applied = ", ".join(f"{field}={value}" for field, value in manual_edits.items())
+    return (
+        f"I already corrected these fields myself, keep them exactly as they are: "
+        f"{applied}.\n\n{review_reply}"
+    )
 
 
 class IntakeService:
@@ -77,6 +119,7 @@ class IntakeService:
             session_id=session_id,
         )
         draft = self._extract_draft_from_state(session_state)
+        grounding = self._extract_grounding(session_state, draft)
         interrupt = self._extract_request_input(events)
         confirmation = ConfirmationRecord(
             confirmation_id=str(uuid4()),
@@ -89,6 +132,7 @@ class IntakeService:
             status=ConfirmationStatus.PENDING_REVIEW,
             incoming_context=context,
             draft_proposal=draft,
+            grounding=grounding,
             review_message=interrupt["review_message"],
             created_at=utc_now(),
             updated_at=utc_now(),
@@ -98,6 +142,7 @@ class IntakeService:
             status="needs_review",
             confirmation_id=confirmation.confirmation_id,
             draft_proposal=draft,
+            grounding=grounding,
             review_message=confirmation.review_message,
         )
 
@@ -114,6 +159,8 @@ class IntakeService:
             ConfirmationStatus.COMMITTED,
             ConfirmationStatus.REJECTED,
             ConfirmationStatus.FAILED,
+            ConfirmationStatus.DUPLICATE,
+            ConfirmationStatus.UNDONE,
         }:
             return IntakeResult(
                 status=confirmation.status.value,
@@ -134,7 +181,7 @@ class IntakeService:
             invocation_id=confirmation.invocation_id,
             message=self._build_review_response(
                 confirmation.request_input_call_id,
-                review_reply,
+                _with_manual_edits(review_reply, confirmation.manual_edits),
             ),
         )
         session_state = await self._get_session_state(
@@ -145,17 +192,20 @@ class IntakeService:
         interrupt = self._try_extract_request_input(events)
         if interrupt is not None:
             draft = self._extract_draft_from_state(session_state)
+            grounding = self._extract_grounding(session_state, draft)
             self.store.update_after_resume(
                 confirmation_id=confirmation_id,
                 draft_proposal=draft,
                 invocation_id=interrupt["invocation_id"],
                 request_input_call_id=interrupt["request_input_call_id"],
                 review_message=interrupt["review_message"],
+                grounding=grounding,
             )
             return IntakeResult(
                 status="needs_review",
                 confirmation_id=confirmation_id,
                 draft_proposal=draft,
+                grounding=grounding,
                 review_message=interrupt["review_message"],
             )
 
@@ -192,9 +242,30 @@ class IntakeService:
                 notion_project_url=confirmation.notion_project_url,
             )
 
+        writer = self.notion_writer or NotionWriter.from_settings(self.settings)
+
+        duplicate = await self._find_duplicate(writer, confirmation)
+        if duplicate is not None:
+            self.store.mark_duplicate(
+                confirmation_id=confirmation_id,
+                notion_project_id=duplicate.page_id,
+                notion_project_url=duplicate.page_url,
+            )
+            return IntakeResult(
+                status=ConfirmationStatus.DUPLICATE.value,
+                confirmation_id=confirmation_id,
+                draft_proposal=confirmation.draft_proposal,
+                grounding=confirmation.grounding,
+                notion_project_url=duplicate.page_url,
+                duplicate_created_time=duplicate.created_time,
+            )
+
         try:
-            writer = self.notion_writer or NotionWriter.from_settings(self.settings)
-            result = await writer.create_project_with_tasks(confirmation.draft_proposal)
+            result = await writer.create_project_with_tasks(
+                confirmation.draft_proposal,
+                incoming_context=confirmation.incoming_context,
+                grounding=confirmation.grounding,
+            )
         except Exception as exc:
             self.store.mark_failed(
                 confirmation_id=confirmation_id,
@@ -206,19 +277,88 @@ class IntakeService:
                 confirmation_id=confirmation_id,
                 draft_proposal=confirmation.draft_proposal,
                 notion_project_url=failed.notion_project_url if failed else None,
+                failure_reason=str(exc),
             )
 
         self.store.mark_committed(
             confirmation_id=confirmation_id,
             notion_project_id=result.project_id,
             notion_project_url=result.project_url,
+            notion_task_ids=result.task_ids,
         )
         return IntakeResult(
             status=ConfirmationStatus.COMMITTED.value,
             confirmation_id=confirmation_id,
             draft_proposal=confirmation.draft_proposal,
+            grounding=confirmation.grounding,
             notion_project_url=result.project_url,
         )
+
+    async def undo_commit(self, confirmation_id: str) -> IntakeResult:
+        """Archive the pages this commit created and release the record."""
+        confirmation = self.store.get(confirmation_id)
+        if confirmation is None:
+            raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
+        if confirmation.status is not ConfirmationStatus.COMMITTED:
+            return IntakeResult(
+                status=confirmation.status.value,
+                confirmation_id=confirmation_id,
+                draft_proposal=confirmation.draft_proposal,
+                notion_project_url=confirmation.notion_project_url,
+            )
+
+        writer = self.notion_writer or NotionWriter.from_settings(self.settings)
+        page_ids = [
+            page_id
+            for page_id in [
+                confirmation.notion_project_id,
+                *confirmation.notion_task_ids,
+            ]
+            if page_id
+        ]
+        await writer.archive_pages(page_ids)
+        self.store.mark_undone(confirmation_id)
+        return IntakeResult(
+            status=ConfirmationStatus.UNDONE.value,
+            confirmation_id=confirmation_id,
+            draft_proposal=confirmation.draft_proposal,
+        )
+
+    async def add_to_existing_project(self, confirmation_id: str) -> IntakeResult:
+        """Attach this draft's tasks to the project the URL already has."""
+        confirmation = self.store.get(confirmation_id)
+        if confirmation is None:
+            raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
+        if confirmation.notion_project_id is None:
+            raise ValueError(f"Confirmation {confirmation_id} has no existing project.")
+
+        writer = self.notion_writer or NotionWriter.from_settings(self.settings)
+        task_ids = await writer.add_tasks_to_project(
+            project_id=confirmation.notion_project_id,
+            draft=confirmation.draft_proposal,
+        )
+        self.store.mark_committed(
+            confirmation_id=confirmation_id,
+            notion_project_id=confirmation.notion_project_id,
+            notion_project_url=confirmation.notion_project_url or "",
+            notion_task_ids=task_ids,
+        )
+        return IntakeResult(
+            status=ConfirmationStatus.COMMITTED.value,
+            confirmation_id=confirmation_id,
+            draft_proposal=confirmation.draft_proposal,
+            grounding=confirmation.grounding,
+            notion_project_url=confirmation.notion_project_url,
+        )
+
+    async def _find_duplicate(self, writer, confirmation: ConfirmationRecord):
+        source_url = (
+            confirmation.grounding.canonical_url
+            or confirmation.draft_proposal.source_url
+        )
+        if not source_url:
+            return None
+        return await writer.find_project_by_source(source_url)
 
     async def _run_turn(
         self,
@@ -257,6 +397,37 @@ class IntakeService:
                 f"user_id={user_id}, session_id={session_id}",
             )
         return dict(session.state)
+
+    def _extract_grounding(
+        self,
+        session_state: dict[str, Any],
+        draft: ProjectDraft,
+    ) -> DraftGrounding:
+        """Summarise what fetch_url found, for the card and the Notion page."""
+        fetched = session_state.get(FETCHED_CONTEXT_STATE_KEY)
+        if not isinstance(fetched, dict) or not fetched:
+            return DraftGrounding(fetch_status="skipped")
+
+        payload = _match_fetched_entry(fetched, draft.source_url)
+        if not isinstance(payload, dict):
+            return DraftGrounding(fetch_status="skipped")
+
+        if payload.get("status") != "success":
+            return DraftGrounding(
+                fetch_status="error",
+                fetch_error=payload.get("error"),
+            )
+
+        key_points = [
+            str(point) for point in (payload.get("key_points") or []) if str(point)
+        ]
+        return DraftGrounding(
+            fetch_status="success",
+            site_name=payload.get("site_name"),
+            page_title=payload.get("title"),
+            canonical_url=payload.get("canonical_url") or payload.get("final_url"),
+            key_points=key_points[:MAX_GROUNDING_KEY_POINTS],
+        )
 
     def _extract_draft_from_state(
         self,

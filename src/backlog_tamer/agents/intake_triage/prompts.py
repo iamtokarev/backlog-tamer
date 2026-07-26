@@ -38,6 +38,12 @@ Rules:
 - Use intent "research" when the item needs deeper analysis or comparison.
 - Use intent "build" when the item should become implementation work.
 - Use intent "learn" when the item is mainly study material.
+- topics are up to 3 lowercase subject tags naming the technology or
+  subject, e.g. ["langgraph", "multi-agent", "orchestration"].
+- Choose topics the user would search for later, not restatements of
+  resource_type or intent, and never generic words like "tool" or "guide".
+- Use fewer topics, or none, rather than inventing ones the source does
+  not support.
 - Choose priority based on likely urgency and usefulness. Default to
   "Medium" when unclear.
 - Default to exactly one task, named by intent: use "Read" for articles,

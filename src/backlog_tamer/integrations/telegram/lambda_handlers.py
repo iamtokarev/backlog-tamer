@@ -75,14 +75,24 @@ def _healthcheck() -> dict[str, Any]:
 
     from backlog_tamer.agents.intake_triage import agent, workflow  # noqa: F401
     from backlog_tamer.agents.intake_triage.tools import fetch_url
-    from backlog_tamer.integrations.notion import writer  # noqa: F401
+    from backlog_tamer.integrations.notion import NotionWriter
 
-    _get_settings()
+    settings = _get_settings()
 
     missing = fetch_url.missing_optional_dependencies()
     if missing:
         raise RuntimeError(
             f"Deployed image is missing extraction dependencies: {', '.join(missing)}"
+        )
+
+    # A property renamed in Notion otherwise surfaces as a 400 during
+    # finalize_approval, after the user has already approved the draft.
+    schema = asyncio.run(NotionWriter.from_settings(settings).describe_schema())
+    if not schema.is_healthy:
+        raise RuntimeError(
+            "Notion databases are missing properties the writer sends: "
+            f"projects={schema.missing_project_properties}, "
+            f"tasks={schema.missing_task_properties}"
         )
 
     # importlib.metadata returns None rather than raising when the installed
@@ -92,7 +102,11 @@ def _healthcheck() -> dict[str, Any]:
     if not installed_version:
         raise RuntimeError("Could not determine the installed backlog-tamer version.")
 
-    return {"ok": True, "version": installed_version}
+    return {
+        "ok": True,
+        "version": installed_version,
+        "skipped_notion_properties": schema.skipped_project_properties,
+    }
 
 
 async def _process_sqs_event(event: dict[str, Any]) -> dict[str, Any]:

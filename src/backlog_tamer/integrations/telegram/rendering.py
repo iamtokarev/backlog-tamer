@@ -1,96 +1,408 @@
 from __future__ import annotations
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.helpers import escape_markdown
+from datetime import datetime
+from html import escape
+from urllib.parse import urlparse
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.application.models import ConfirmationStatus
 
 CALLBACK_APPROVE = "approve"
 CALLBACK_REVISE = "revise"
 CALLBACK_REJECT = "reject"
+CALLBACK_RETRY = "retry"
+CALLBACK_CANCEL = "cancel"
+CALLBACK_EDIT = "edit"
+CALLBACK_REFETCH = "refetch"
+CALLBACK_UNDO = "undo"
+CALLBACK_ADD_TASK = "addtask"
+CALLBACK_PICK = "pick"
+CALLBACK_BACK = "back"
 
-REVISION_PROMPT = "✏️ Send your revision as a reply\\."
+# Single-letter codes keep callback_data inside Telegram's 64-byte limit
+# once a 36-character confirmation id is appended.
+FIELD_PRIORITY = "p"
+FIELD_INTENT = "i"
+FIELD_TYPE = "t"
+
+DRAFT_FIELD_NAMES = {
+    FIELD_PRIORITY: "priority",
+    FIELD_INTENT: "intent",
+    FIELD_TYPE: "resource_type",
+}
+
+REVISION_PLACEHOLDER = "What should change?"
+
+RESOURCE_TYPE_ICONS = {
+    "article": "📄",
+    "paper": "🧪",
+    "video": "🎬",
+    "course": "🎓",
+    "documentation": "📘",
+    "repository": "📦",
+    "idea": "💡",
+    "unknown": "❔",
+}
+
+INTENT_ICONS = {
+    "learn": "📚",
+    "build": "🔨",
+    "research": "🔬",
+    "explore": "🧭",
+    "reference": "🔖",
+    "unclear": "❔",
+}
+
+PRIORITY_ICONS = {
+    "High": "🔺",
+    "Medium": "▪️",
+    "Low": "🔻",
+}
+
+FIELD_OPTIONS = {
+    FIELD_PRIORITY: ("High", "Medium", "Low"),
+    FIELD_INTENT: tuple(INTENT_ICONS),
+    FIELD_TYPE: tuple(RESOURCE_TYPE_ICONS),
+}
+
+FIELD_ICONS = {
+    FIELD_PRIORITY: PRIORITY_ICONS,
+    FIELD_INTENT: INTENT_ICONS,
+    FIELD_TYPE: RESOURCE_TYPE_ICONS,
+}
 
 
-def render_draft_message(draft: ProjectDraft) -> str:
-    project_name = escape_markdown(draft.project_name, version=2)
-    summary = escape_markdown(draft.summary, version=2)
-    resource_type = escape_markdown(draft.resource_type, version=2)
-    intent = escape_markdown(draft.intent, version=2)
-    priority = escape_markdown(draft.priority, version=2)
-    tasks = "\n".join(f"• {escape_markdown(task, version=2)}" for task in draft.tasks)
-
-    lines = [
-        f"*Project:* {project_name}",
-        f"*Type:* {resource_type}",
-        f"*Intent:* {intent}",
-        f"*Priority:* {priority}",
-    ]
-    if draft.source_url:
-        url_label = escape_markdown(draft.source_url, version=2)
-        url_target = _escape_link_target(draft.source_url)
-        lines.append(f"*Source:* [{url_label}]({url_target})")
-
-    lines.extend(
-        [
-            "",
-            "*Summary:*",
-            summary,
-            "",
-            "*Tasks:*",
-            tasks,
-        ]
+def render_revision_prompt(draft: ProjectDraft) -> str:
+    return (
+        f"✏️ What should I change about <b>{escape(draft.project_name)}</b>?\n"
+        "Reply with your feedback, or press Cancel on the draft above."
     )
-    return "\n".join(lines)
 
 
-def build_review_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
+def render_change_summary(before: ProjectDraft, after: ProjectDraft) -> str | None:
+    """One line naming what the revision actually moved."""
+    changes: list[str] = []
+    for field, label in (
+        ("priority", "priority"),
+        ("intent", "intent"),
+        ("resource_type", "type"),
+    ):
+        old = getattr(before, field)
+        new = getattr(after, field)
+        if old != new:
+            changes.append(f"{label} {old} → {new}")
+
+    if len(before.tasks) != len(after.tasks):
+        changes.append(f"tasks {len(before.tasks)} → {len(after.tasks)}")
+    elif before.tasks != after.tasks:
+        changes.append("tasks rewritten")
+
+    if before.project_name != after.project_name:
+        changes.append("title rewritten")
+    if before.summary != after.summary:
+        changes.append("summary rewritten")
+    if before.source_url != after.source_url:
+        changes.append("source changed")
+
+    if not changes:
+        return None
+    return f"✏️ <i>Changed: {escape(' · '.join(changes))}</i>"
+
+
+def build_cancel_revision_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "✅ Approve",
-                    callback_data=f"{CALLBACK_APPROVE}:{confirmation_id}",
-                ),
+                    "✕ Cancel revision",
+                    callback_data=f"{CALLBACK_CANCEL}:{confirmation_id}",
+                )
+            ]
+        ]
+    )
+
+
+def render_progress_message(incoming: IncomingContext) -> str:
+    """Shown while the agent works: the typing action expires after ~5s."""
+    if incoming.links:
+        return f"🔎 Reading {escape(_display_url(str(incoming.links[0].url)))}…"
+    return "🧠 Triaging your note…"
+
+
+def render_draft_message(
+    draft: ProjectDraft,
+    grounding: DraftGrounding | None = None,
+) -> str:
+    """Render the review card: title first, then meta, summary, source, tasks."""
+    lines = [
+        f"<b>{escape(draft.project_name)}</b>",
+        _render_chips(draft),
+        "",
+        escape(draft.summary),
+    ]
+
+    if draft.source_url:
+        lines.append("")
+        lines.append(_render_source(draft.source_url, grounding))
+
+    if draft.tasks:
+        lines.append("")
+        lines.extend(f"☑︎ {escape(task)}" for task in draft.tasks)
+
+    if draft.topics:
+        lines.append("")
+        lines.append(f"🏷 {escape(' · '.join(draft.topics))}")
+
+    if grounding is not None and grounding.is_degraded:
+        lines.append("")
+        lines.append(_render_fetch_warning(grounding))
+
+    return "\n".join(lines)
+
+
+def _render_source(source_url: str, grounding: DraftGrounding | None) -> str:
+    line = f"🔗 {_link(source_url, _display_url(source_url))}"
+    if grounding is not None and grounding.site_name:
+        line = f"{line} · {escape(grounding.site_name)}"
+    return line
+
+
+def _render_fetch_warning(grounding: DraftGrounding) -> str:
+    """State the uncertainty rather than letting a guess look grounded."""
+    reason = f" ({escape(grounding.fetch_error)})" if grounding.fetch_error else ""
+    return (
+        f"⚠️ <i>Couldn't open the page{reason}. Drafted from the URL and your "
+        "note — check the title.</i>"
+    )
+
+
+def _render_chips(draft: ProjectDraft) -> str:
+    chips = [
+        f"{RESOURCE_TYPE_ICONS.get(draft.resource_type, '❔')} {draft.resource_type}",
+        f"{INTENT_ICONS.get(draft.intent, '❔')} {draft.intent}",
+        f"{PRIORITY_ICONS.get(draft.priority, '▪️')} {draft.priority}",
+    ]
+    return escape(" · ".join(chips))
+
+
+def _display_url(url: str) -> str:
+    """Show the domain rather than a URL that wraps three times on a phone."""
+    host = urlparse(url).netloc
+    if not host:
+        return url
+    return host.removeprefix("www.")
+
+
+def build_review_keyboard(
+    draft: ProjectDraft,
+    confirmation_id: str,
+    grounding: DraftGrounding | None = None,
+) -> InlineKeyboardMarkup:
+    """Approve/reject, plus one-tap pickers for the three enum fields."""
+    refetch_row = []
+    if grounding is not None and grounding.is_degraded:
+        refetch_row = [
+            [
                 InlineKeyboardButton(
-                    "📝 Revise",
-                    callback_data=f"{CALLBACK_REVISE}:{confirmation_id}",
+                    "🔁 Retry fetch",
+                    callback_data=f"{CALLBACK_REFETCH}:{confirmation_id}",
+                )
+            ]
+        ]
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Approve & save",
+                    callback_data=f"{CALLBACK_APPROVE}:{confirmation_id}",
                 ),
                 InlineKeyboardButton(
                     "❌ Reject",
                     callback_data=f"{CALLBACK_REJECT}:{confirmation_id}",
                 ),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    f"{PRIORITY_ICONS.get(draft.priority, '▪️')} {draft.priority} ▸",
+                    callback_data=f"{CALLBACK_EDIT}:{FIELD_PRIORITY}:{confirmation_id}",
+                ),
+                InlineKeyboardButton(
+                    f"{INTENT_ICONS.get(draft.intent, '❔')} {draft.intent} ▸",
+                    callback_data=f"{CALLBACK_EDIT}:{FIELD_INTENT}:{confirmation_id}",
+                ),
+                InlineKeyboardButton(
+                    f"{RESOURCE_TYPE_ICONS.get(draft.resource_type, '❔')} "
+                    f"{draft.resource_type} ▸",
+                    callback_data=f"{CALLBACK_EDIT}:{FIELD_TYPE}:{confirmation_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📝 Revise with a note",
+                    callback_data=f"{CALLBACK_REVISE}:{confirmation_id}",
+                ),
+            ],
+            *refetch_row,
         ]
     )
+
+
+def build_picker_keyboard(
+    field_code: str,
+    confirmation_id: str,
+) -> InlineKeyboardMarkup:
+    """Replace the review keyboard with the options for one field."""
+    options = FIELD_OPTIONS[field_code]
+    icons = FIELD_ICONS[field_code]
+    buttons = [
+        InlineKeyboardButton(
+            f"{icons.get(option, '❔')} {option}",
+            callback_data=f"{CALLBACK_PICK}:{field_code}:{option}:{confirmation_id}",
+        )
+        for option in options
+    ]
+    rows = [buttons[index : index + 3] for index in range(0, len(buttons), 3)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "↩︎ Back",
+                callback_data=f"{CALLBACK_BACK}:{confirmation_id}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
 
 
 def render_terminal_message(
     draft: ProjectDraft,
     status: ConfirmationStatus,
     notion_project_url: str | None = None,
+    failure_reason: str | None = None,
+    duplicate_created_time: str | None = None,
 ) -> str:
-    body = render_draft_message(draft)
+    """Once it is resolved the detail lives in Notion, so keep this short.
+
+    The exception is a failed save, where the draft is all the user has left.
+    """
     badge = _terminal_badge(status)
-    if notion_project_url:
-        url_label = escape_markdown(notion_project_url, version=2)
-        url_target = _escape_link_target(notion_project_url)
-        return f"{badge}\n*Notion:* [{url_label}]({url_target})\n\n{body}"
-    return f"{badge}\n\n{body}"
+    if status is ConfirmationStatus.FAILED:
+        return (
+            f"{badge}\n{_short_failure_reason(failure_reason)}\n\n"
+            f"{render_draft_message(draft)}"
+        )
+
+    lines = [badge, escape(draft.project_name)]
+
+    if status is ConfirmationStatus.DUPLICATE:
+        saved_on = _format_created_time(duplicate_created_time)
+        since = f" since {escape(saved_on)}" if saved_on else ""
+        lines.append(f"<i>This link is already in your backlog{since}.</i>")
+        return "\n".join(lines)
+
+    if status is ConfirmationStatus.UNDONE:
+        lines.append("<i>Send the item again if you want it back.</i>")
+        return "\n".join(lines)
+
+    lines.append(f"{_render_chips(draft)} · {_task_count(draft)}")
+    return "\n".join(lines)
+
+
+def build_terminal_keyboard(
+    status: ConfirmationStatus,
+    confirmation_id: str,
+    notion_project_url: str | None = None,
+) -> InlineKeyboardMarkup | None:
+    if status is ConfirmationStatus.FAILED:
+        # The draft is still stored, so only the write needs repeating.
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🔁 Retry save",
+                        callback_data=f"{CALLBACK_RETRY}:{confirmation_id}",
+                    )
+                ]
+            ]
+        )
+
+    if status is ConfirmationStatus.COMMITTED and notion_project_url:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("↗️ Open in Notion", url=notion_project_url),
+                    InlineKeyboardButton(
+                        "↩️ Undo",
+                        callback_data=f"{CALLBACK_UNDO}:{confirmation_id}",
+                    ),
+                ]
+            ]
+        )
+
+    if status is ConfirmationStatus.DUPLICATE and notion_project_url:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("↗️ Open existing", url=notion_project_url),
+                    InlineKeyboardButton(
+                        "＋ Add task there",
+                        callback_data=f"{CALLBACK_ADD_TASK}:{confirmation_id}",
+                    ),
+                ]
+            ]
+        )
+
+    return None
+
+
+def _task_count(draft: ProjectDraft) -> str:
+    count = len(draft.tasks)
+    return "1 task" if count == 1 else f"{count} tasks"
+
+
+def _format_created_time(created_time: str | None) -> str | None:
+    """Notion returns an ISO timestamp; the date is all that is worth showing."""
+    if not created_time:
+        return None
+    try:
+        return datetime.fromisoformat(created_time.replace("Z", "+00:00")).strftime(
+            "%d %b %Y"
+        )
+    except ValueError:
+        return None
+
+
+def _short_failure_reason(failure_reason: str | None) -> str:
+    """One readable line: exception strings are long and often carry a URL."""
+    if not failure_reason:
+        return "Your draft is safe — press retry to try Notion again."
+    reason = " ".join(failure_reason.split())
+    if len(reason) > 160:
+        reason = f"{reason[:157]}…"
+    return f"{escape(reason)}\nYour draft is safe — press retry to try Notion again."
 
 
 def _terminal_badge(status: ConfirmationStatus) -> str:
     if status is ConfirmationStatus.COMMITTED:
-        return "✅ *Saved*"
+        return "✅ <b>Saved to Notion</b>"
     if status is ConfirmationStatus.COMMITTING:
-        return "⏳ *Saving*"
+        return "⏳ <b>Saving</b>"
     if status is ConfirmationStatus.FAILED:
-        return "⚠️ *Save failed*"
+        return "⚠️ <b>Save failed</b>"
     if status is ConfirmationStatus.REJECTED:
-        return "❌ *Rejected*"
-    return "⏳ *Pending*"
+        return "❌ <b>Rejected</b>"
+    if status is ConfirmationStatus.DUPLICATE:
+        return "🔁 <b>Already in your backlog</b>"
+    if status is ConfirmationStatus.UNDONE:
+        return "↩️ <b>Removed from Notion</b>"
+    return "⏳ <b>Pending</b>"
 
 
-def _escape_link_target(url: str) -> str:
-    return url.replace("\\", "\\\\").replace(")", "\\)")
+def _link(url: str, label: str) -> str:
+    return f'<a href="{escape(url, quote=True)}">{escape(label)}</a>'

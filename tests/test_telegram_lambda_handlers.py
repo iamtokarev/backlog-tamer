@@ -7,6 +7,7 @@ import pytest
 
 from backlog_tamer.agents.intake_triage.tools import fetch_url
 from backlog_tamer.config import get_settings
+from backlog_tamer.integrations.notion import NotionSchemaReport, NotionWriter
 from backlog_tamer.integrations.telegram.lambda_handlers import (
     QUEUE_URL_ENV,
     SECRET_ARN_ENV,
@@ -21,6 +22,7 @@ REQUIRED_SETTINGS_ENV = {
     "AGENT__OPENAI_API_KEY": "test-openai-key",
     "TELEGRAM__BOT_TOKEN": "test-bot-token",
     "TELEGRAM__ALLOWED_USER_ID": "42",
+    "NOTION_TOKEN": "test-notion-token",
     "NOTION_PROJECTS_DATABASE_ID": "test-projects-db",
     "NOTION_TASKS_DATABASE_ID": "test-tasks-db",
 }
@@ -35,6 +37,17 @@ def healthcheck_env(monkeypatch):
     )
     for key, value in REQUIRED_SETTINGS_ENV.items():
         monkeypatch.setenv(key, value)
+
+    # The schema probe is a real Notion call in the deployed healthcheck;
+    # here it stands in for a workspace whose columns all line up.
+    async def healthy_schema(self):
+        return NotionSchemaReport(
+            missing_project_properties=[],
+            missing_task_properties=[],
+            skipped_project_properties=[],
+        )
+
+    monkeypatch.setattr(NotionWriter, "describe_schema", healthy_schema)
 
     # get_settings is lru_cached, so clear it on both sides to keep these
     # values from leaking into or out of other tests.
