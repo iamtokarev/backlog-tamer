@@ -56,7 +56,7 @@ class ProjectDraft(BaseModel):
     ]
     priority: Literal["Low", "Medium", "High"]
     source_url: str | None = None
-    tasks: list[str] | None = None
+    tasks: list[str] = Field(default_factory=list)
 
 
 class ReviewDecision(BaseModel):
