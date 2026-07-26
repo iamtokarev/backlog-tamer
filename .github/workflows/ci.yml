@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_call:
 
 permissions:
   contents: read
@@ -65,11 +66,13 @@ jobs:
 
   docker:
     name: Docker
-    runs-on: ubuntu-latest
+    # Native arm64 runner: matches the architecture the Lambdas actually run on,
+    # so the build validates production wheels without QEMU emulation.
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
       - name: Build image
-        run: docker buildx build --platform linux/amd64 -t backlog-tamer:ci --load .
+        run: docker buildx build --platform linux/arm64 -t backlog-tamer:ci --load .

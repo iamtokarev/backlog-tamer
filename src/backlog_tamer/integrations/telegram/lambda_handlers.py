@@ -59,7 +59,40 @@ def webhook_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
 def worker_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     _load_runtime_secrets()
+    if event.get("healthcheck"):
+        return _healthcheck()
     return asyncio.run(_process_sqs_event(event))
+
+
+def _healthcheck() -> dict[str, Any]:
+    """Prove the deployed image can do real work, and report its version.
+
+    Invoked by the deploy workflow. The imports are deliberately eager: the
+    heavy agent and Notion modules are otherwise only loaded when a real update
+    arrives, so a broken image would first surface as a failed user message.
+    """
+    from importlib.metadata import version
+
+    from backlog_tamer.agents.intake_triage import agent, workflow  # noqa: F401
+    from backlog_tamer.agents.intake_triage.tools import fetch_url
+    from backlog_tamer.integrations.notion import writer  # noqa: F401
+
+    _get_settings()
+
+    missing = fetch_url.missing_optional_dependencies()
+    if missing:
+        raise RuntimeError(
+            f"Deployed image is missing extraction dependencies: {', '.join(missing)}"
+        )
+
+    # importlib.metadata returns None rather than raising when the installed
+    # dist-info is present but incomplete, which would let the deploy's version
+    # assertion fail with a confusing message instead of this one.
+    installed_version = version("backlog-tamer")
+    if not installed_version:
+        raise RuntimeError("Could not determine the installed backlog-tamer version.")
+
+    return {"ok": True, "version": installed_version}
 
 
 async def _process_sqs_event(event: dict[str, Any]) -> dict[str, Any]:

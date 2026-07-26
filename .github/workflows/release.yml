@@ -1,0 +1,104 @@
+name: Release
+
+# Owns the release lifecycle. On every push to main, release-please maintains a
+# standing release PR that bumps pyproject.toml and writes CHANGELOG.md from
+# conventional commits. Merging that PR cuts a tag and a GitHub release, which
+# runs CI once more as a gate and then deploys.
+#
+# Deploy is invoked here as a reusable workflow rather than by an `on: push:
+# tags` trigger, because tags created with the default GITHUB_TOKEN do not
+# trigger other workflows.
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-please:
+    name: Release PR
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      prs_created: ${{ steps.release.outputs.prs_created }}
+      pr: ${{ steps.release.outputs.pr }}
+
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # uv.lock pins the root package version, so release-please's pyproject.toml
+  # bump leaves the lock stale and every `uv run --locked` call in CI fails.
+  # Relock on the release PR branch to keep it consistent.
+  #
+  # release-please force-pushes the release branch each time it updates the PR,
+  # which drops this commit — that is fine, because this job runs immediately
+  # after it in the same workflow run and re-applies it.
+  relock:
+    name: Relock uv.lock
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: needs.release-please.outputs.prs_created == 'true'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout release PR branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Relock
+        run: uv lock
+
+      - name: Commit if changed
+        run: |
+          if [ -z "$(git status --porcelain uv.lock)" ]; then
+            echo "uv.lock already in sync."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          git commit -m "chore: relock uv.lock for release"
+          git push
+
+  # Re-runs the full suite against the release commit as a synchronous gate.
+  # The standalone CI run on this same push cannot be awaited from here without
+  # reintroducing the workflow_run indirection this design removed.
+  ci:
+    name: CI
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy
+    needs: [release-please, ci]
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      version: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
