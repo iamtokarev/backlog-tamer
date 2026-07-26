@@ -39,7 +39,7 @@ TASK_NAME_PROPERTY = "Task name"
 TASK_STATUS_PROPERTY = "Status"
 TASK_PRIORITY_PROPERTY = "Priority"
 TASK_PROJECT_PROPERTY = "Projects"
-TASK_DUE_PROPERTY = "Due date"
+TASK_DUE_PROPERTY = "Due"
 TASK_SOURCE_PROPERTY = "Source"
 
 # Properties the writer sends but a database may legitimately not have yet.

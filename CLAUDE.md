@@ -59,7 +59,7 @@ do not exist, so these can be added whenever — until then the feature is just
 absent:
 
 - **Projects**: `Source` (url), `Type` (select), `Intent` (select), `Captured` (date)
-- **Tasks**: `Due date` (date), `Source` (url)
+- **Tasks**: `Due` (date), `Source` (url)
 
 Duplicate detection queries Projects by `Source`, so without that column every
 send creates a new project. `worker_handler` with `{"healthcheck": true}`

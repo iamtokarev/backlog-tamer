@@ -39,7 +39,7 @@ ALL_TASK_PROPERTIES = {
     "Status",
     "Priority",
     "Projects",
-    "Due date",
+    "Due",
     "Source",
 }
 
@@ -544,7 +544,7 @@ def test_task_gets_a_due_date_from_priority_and_carries_the_source():
     )
 
     properties = payload["properties"]
-    assert properties["Due date"] == {"date": {"start": "2026-07-29"}}
+    assert properties["Due"] == {"date": {"start": "2026-07-29"}}
     assert properties["Source"] == {"url": "https://example.com/adk"}
 
 
@@ -562,7 +562,7 @@ def test_medium_priority_tasks_get_a_softer_due_date():
         today=date(2026, 7, 26),
     )
 
-    assert payload["properties"]["Due date"] == {"date": {"start": "2026-08-09"}}
+    assert payload["properties"]["Due"] == {"date": {"start": "2026-08-09"}}
 
 
 def test_low_priority_tasks_are_left_unscheduled():
@@ -579,7 +579,7 @@ def test_low_priority_tasks_are_left_unscheduled():
         today=date(2026, 7, 26),
     )
 
-    assert "Due date" not in payload["properties"]
+    assert "Due" not in payload["properties"]
 
 
 def test_task_properties_are_filtered_against_the_tasks_database():
