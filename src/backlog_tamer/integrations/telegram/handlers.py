@@ -96,7 +96,7 @@ async def handle_callback(
         )
         await query.message.reply_text(
             REVISION_PROMPT,
-            parse_mode=ParseMode.MARKDOWN_V2,
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -123,7 +123,7 @@ async def handle_callback(
             status,
             result.notion_project_url,
         ),
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -209,7 +209,7 @@ async def _handle_revision_text(
             status,
             result.notion_project_url,
         ),
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -220,7 +220,7 @@ async def _send_draft(update: Update, result: IntakeResult) -> None:
 
     await message.reply_text(
         render_draft_message(result.draft_proposal),
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode=ParseMode.HTML,
         reply_markup=build_review_keyboard(result.confirmation_id),
     )
 

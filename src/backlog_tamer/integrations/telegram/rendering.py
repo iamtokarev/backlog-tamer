@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from html import escape
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.helpers import escape_markdown
 
 from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
 from backlog_tamer.application.models import ConfirmationStatus
@@ -10,35 +11,28 @@ CALLBACK_APPROVE = "approve"
 CALLBACK_REVISE = "revise"
 CALLBACK_REJECT = "reject"
 
-REVISION_PROMPT = "✏️ Send your revision as a reply\\."
+REVISION_PROMPT = "✏️ Send your revision as a reply."
 
 
 def render_draft_message(draft: ProjectDraft) -> str:
-    project_name = escape_markdown(draft.project_name, version=2)
-    summary = escape_markdown(draft.summary, version=2)
-    resource_type = escape_markdown(draft.resource_type, version=2)
-    intent = escape_markdown(draft.intent, version=2)
-    priority = escape_markdown(draft.priority, version=2)
-    tasks = "\n".join(f"• {escape_markdown(task, version=2)}" for task in draft.tasks)
+    tasks = "\n".join(f"• {escape(task)}" for task in draft.tasks)
 
     lines = [
-        f"*Project:* {project_name}",
-        f"*Type:* {resource_type}",
-        f"*Intent:* {intent}",
-        f"*Priority:* {priority}",
+        f"<b>Project:</b> {escape(draft.project_name)}",
+        f"<b>Type:</b> {escape(draft.resource_type)}",
+        f"<b>Intent:</b> {escape(draft.intent)}",
+        f"<b>Priority:</b> {escape(draft.priority)}",
     ]
     if draft.source_url:
-        url_label = escape_markdown(draft.source_url, version=2)
-        url_target = _escape_link_target(draft.source_url)
-        lines.append(f"*Source:* [{url_label}]({url_target})")
+        lines.append(f"<b>Source:</b> {_link(draft.source_url, draft.source_url)}")
 
     lines.extend(
         [
             "",
-            "*Summary:*",
-            summary,
+            "<b>Summary:</b>",
+            escape(draft.summary),
             "",
-            "*Tasks:*",
+            "<b>Tasks:</b>",
             tasks,
         ]
     )
@@ -74,23 +68,22 @@ def render_terminal_message(
     body = render_draft_message(draft)
     badge = _terminal_badge(status)
     if notion_project_url:
-        url_label = escape_markdown(notion_project_url, version=2)
-        url_target = _escape_link_target(notion_project_url)
-        return f"{badge}\n*Notion:* [{url_label}]({url_target})\n\n{body}"
+        link = _link(notion_project_url, notion_project_url)
+        return f"{badge}\n<b>Notion:</b> {link}\n\n{body}"
     return f"{badge}\n\n{body}"
 
 
 def _terminal_badge(status: ConfirmationStatus) -> str:
     if status is ConfirmationStatus.COMMITTED:
-        return "✅ *Saved*"
+        return "✅ <b>Saved</b>"
     if status is ConfirmationStatus.COMMITTING:
-        return "⏳ *Saving*"
+        return "⏳ <b>Saving</b>"
     if status is ConfirmationStatus.FAILED:
-        return "⚠️ *Save failed*"
+        return "⚠️ <b>Save failed</b>"
     if status is ConfirmationStatus.REJECTED:
-        return "❌ *Rejected*"
-    return "⏳ *Pending*"
+        return "❌ <b>Rejected</b>"
+    return "⏳ <b>Pending</b>"
 
 
-def _escape_link_target(url: str) -> str:
-    return url.replace("\\", "\\\\").replace(")", "\\)")
+def _link(url: str, label: str) -> str:
+    return f'<a href="{escape(url, quote=True)}">{escape(label)}</a>'
