@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
 from backlog_tamer.application.models import ConfirmationStatus
 
 CALLBACK_APPROVE = "approve"
@@ -67,6 +67,13 @@ FIELD_ICONS = {
     FIELD_INTENT: INTENT_ICONS,
     FIELD_TYPE: RESOURCE_TYPE_ICONS,
 }
+
+
+def render_progress_message(incoming: IncomingContext) -> str:
+    """Shown while the agent works: the typing action expires after ~5s."""
+    if incoming.links:
+        return f"🔎 Reading {escape(_display_url(str(incoming.links[0].url)))}…"
+    return "🧠 Triaging your note…"
 
 
 def render_draft_message(draft: ProjectDraft) -> str:

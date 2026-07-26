@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from telegram import Update
-from telegram.constants import ChatAction, ParseMode
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from backlog_tamer.application.intake_service import IntakeService
@@ -24,6 +24,7 @@ from .rendering import (
     build_retry_keyboard,
     build_review_keyboard,
     render_draft_message,
+    render_progress_message,
     render_terminal_message,
 )
 from .state import (
@@ -48,6 +49,8 @@ REVIEW_ERROR_REPLY = (
 UNKNOWN_CONFIRMATION_REPLY = (
     "I lost track of that draft. Send the item again to start over."
 )
+REVISING_MESSAGE = "✍️ Revising the draft…"
+SAVING_MESSAGE = "⏳ Saving to Notion…"
 
 
 async def handle_message(
@@ -119,6 +122,10 @@ async def handle_callback(
     if action not in {CALLBACK_APPROVE, CALLBACK_REJECT, CALLBACK_RETRY}:
         logger.warning("Unknown callback action: %r", action)
         return
+
+    if action in {CALLBACK_APPROVE, CALLBACK_RETRY}:
+        # Drops the keyboard too, so the button cannot be pressed twice.
+        await query.edit_message_text(SAVING_MESSAGE, parse_mode=ParseMode.HTML)
 
     try:
         if action == CALLBACK_RETRY:
@@ -210,7 +217,10 @@ async def _handle_new_intake(
     intake_service = _get_intake_service(context)
     incoming = build_incoming_context(message)
 
-    await chat.send_action(ChatAction.TYPING)
+    progress = await message.reply_text(
+        render_progress_message(incoming),
+        parse_mode=ParseMode.HTML,
+    )
 
     try:
         result = await intake_service.start_intake(
@@ -221,10 +231,10 @@ async def _handle_new_intake(
         )
     except Exception:
         logger.exception("start_intake failed")
-        await message.reply_text(DRAFT_ERROR_REPLY)
+        await progress.edit_text(DRAFT_ERROR_REPLY)
         return
 
-    await _send_draft(update, result)
+    await _show_draft(progress, result)
 
 
 async def _handle_revision_text(
@@ -255,36 +265,36 @@ async def _handle_revision_text(
 
     intake_service = _get_intake_service(context)
 
-    await chat.send_action(ChatAction.TYPING)
+    progress = await message.reply_text(REVISING_MESSAGE, parse_mode=ParseMode.HTML)
 
     try:
         result = await intake_service.resume_intake(confirmation_id, feedback)
     except ValueError:
         logger.exception("resume_intake failed for confirmation %s", confirmation_id)
-        await message.reply_text(UNKNOWN_CONFIRMATION_REPLY)
+        await progress.edit_text(UNKNOWN_CONFIRMATION_REPLY)
         return
     except Exception:
         logger.exception("Unexpected resume_intake error during revision")
-        await message.reply_text(REVIEW_ERROR_REPLY)
+        await progress.edit_text(REVIEW_ERROR_REPLY)
         return
 
     if result.status == "needs_review":
-        await _send_draft(update, result)
+        await _show_draft(progress, result)
         return
 
-    await message.reply_text(
+    await progress.edit_text(
         _terminal_text(result),
         parse_mode=ParseMode.HTML,
         reply_markup=_terminal_keyboard(result),
     )
 
 
-async def _send_draft(update: Update, result: IntakeResult) -> None:
-    message = update.effective_message
-    if message is None or result.draft_proposal is None:
+async def _show_draft(progress_message, result: IntakeResult) -> None:
+    """Turn the progress placeholder into the review card."""
+    if result.draft_proposal is None:
         return
 
-    await message.reply_text(
+    await progress_message.edit_text(
         render_draft_message(result.draft_proposal),
         parse_mode=ParseMode.HTML,
         reply_markup=build_review_keyboard(

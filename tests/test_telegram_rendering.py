@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    IncomingContext,
+    ProjectDraft,
+    SourceLink,
+)
 from backlog_tamer.application.models import ConfirmationStatus
 from backlog_tamer.integrations.telegram.rendering import (
     render_draft_message,
+    render_progress_message,
     render_terminal_message,
 )
 
@@ -84,6 +89,25 @@ def test_draft_message_handles_a_draft_without_tasks_or_source():
     assert "🔗" not in message
     assert "☑︎" not in message
     assert message.endswith("Graph of stateful nodes with explicit control flow.")
+
+
+def test_progress_message_names_the_page_being_read():
+    incoming = IncomingContext(
+        raw_text="https://blog.langchain.com/langgraph-multi-agent-workflows/",
+        links=[
+            SourceLink(
+                url="https://blog.langchain.com/langgraph-multi-agent-workflows/"
+            )
+        ],
+    )
+
+    assert render_progress_message(incoming) == "🔎 Reading blog.langchain.com…"
+
+
+def test_progress_message_falls_back_when_there_is_no_link():
+    incoming = IncomingContext(raw_text="idea: try duckdb for the eval store")
+
+    assert render_progress_message(incoming) == "🧠 Triaging your note…"
 
 
 def test_terminal_message_shows_status_badge_and_notion_link():
