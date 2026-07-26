@@ -10,7 +10,11 @@ from typing import Any
 
 import httpx
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -110,11 +114,16 @@ class NotionWriter:
         self,
         draft: ProjectDraft,
         incoming_context: IncomingContext | None = None,
+        grounding: DraftGrounding | None = None,
     ) -> NotionCommitResult:
         async with self._session() as client:
             payload = await self._fit_to_schema(
                 client,
-                self.build_project_payload(draft, incoming_context=incoming_context),
+                self.build_project_payload(
+                    draft,
+                    incoming_context=incoming_context,
+                    grounding=grounding,
+                ),
             )
             project = await self._post_page(client, payload)
             project_id = _require_text(project, "id")
@@ -145,6 +154,7 @@ class NotionWriter:
         draft: ProjectDraft,
         captured_at: date | None = None,
         incoming_context: IncomingContext | None = None,
+        grounding: DraftGrounding | None = None,
     ) -> dict[str, Any]:
         captured_on = captured_at or date.today()
         properties: dict[str, Any] = {
@@ -168,6 +178,7 @@ class NotionWriter:
             "children": build_project_children(
                 draft,
                 incoming_context=incoming_context,
+                grounding=grounding,
                 captured_on=captured_on,
             ),
         }
@@ -333,6 +344,7 @@ def build_project_children(
     draft: ProjectDraft,
     *,
     incoming_context: IncomingContext | None = None,
+    grounding: DraftGrounding | None = None,
     captured_on: date | None = None,
 ) -> list[dict[str, Any]]:
     """The page body.
@@ -357,17 +369,21 @@ def build_project_children(
         children.append(_heading("Why I saved this"))
         children.append(_paragraph(note))
 
+    if grounding is not None and grounding.key_points:
+        children.append(_heading("Key points"))
+        children.extend(_bulleted(point) for point in grounding.key_points)
+
     if draft.tasks:
         children.append(_heading("Next action"))
         children.extend(_to_do(task) for task in draft.tasks)
 
-    children.append(
-        _callout(
-            "🤖",
-            f"Captured via Telegram on {(captured_on or date.today()).isoformat()} · "
-            f"drafted by intake_triage",
-        )
-    )
+    provenance = [
+        f"Captured via Telegram on {(captured_on or date.today()).isoformat()}"
+    ]
+    if grounding is not None and grounding.site_name:
+        provenance.append(grounding.site_name)
+    provenance.append("drafted by intake_triage")
+    children.append(_callout("🤖", " · ".join(provenance)))
     return children
 
 
@@ -398,6 +414,14 @@ def _paragraph(text: str) -> dict[str, Any]:
         "object": "block",
         "type": "paragraph",
         "paragraph": {"rich_text": _text_fragments(text)},
+    }
+
+
+def _bulleted(text: str) -> dict[str, Any]:
+    return {
+        "object": "block",
+        "type": "bulleted_list_item",
+        "bulleted_list_item": {"rich_text": _text_fragments(text)},
     }
 
 

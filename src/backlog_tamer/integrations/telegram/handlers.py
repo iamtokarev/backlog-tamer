@@ -7,6 +7,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
+from backlog_tamer.agents.intake_triage.tools import fetch_url
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationStatus, IntakeResult
 
@@ -17,6 +18,7 @@ from .rendering import (
     CALLBACK_CANCEL,
     CALLBACK_EDIT,
     CALLBACK_PICK,
+    CALLBACK_REFETCH,
     CALLBACK_REJECT,
     CALLBACK_RETRY,
     CALLBACK_REVISE,
@@ -56,6 +58,11 @@ UNKNOWN_CONFIRMATION_REPLY = (
 )
 REVISING_MESSAGE = "✍️ Revising the draft…"
 SAVING_MESSAGE = "⏳ Saving to Notion…"
+REFETCHING_MESSAGE = "🔎 Opening the page again…"
+REFETCH_FEEDBACK = (
+    "The page fetch failed last time. Fetch the source URL again and redraft "
+    "from what the page actually says."
+)
 
 
 async def handle_message(
@@ -146,13 +153,21 @@ async def handle_callback(
         if identity is not None:
             user_id, chat_id = identity
             get_session_revision(context, user_id=user_id, chat_id=chat_id)
-        draft = _require_draft(intake_service, confirmation_id)
-        if draft is None:
+        record = intake_service.store.get(confirmation_id)
+        if record is None:
             await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
             return
         await query.edit_message_reply_markup(
-            reply_markup=build_review_keyboard(draft, confirmation_id),
+            reply_markup=build_review_keyboard(
+                record.draft_proposal,
+                confirmation_id,
+                record.grounding,
+            ),
         )
+        return
+
+    if action == CALLBACK_REFETCH:
+        await _handle_refetch(query, intake_service, confirmation_id)
         return
 
     if action not in {CALLBACK_APPROVE, CALLBACK_REJECT, CALLBACK_RETRY}:
@@ -184,6 +199,41 @@ async def handle_callback(
     )
 
 
+async def _handle_refetch(
+    query,
+    intake_service: IntakeService,
+    confirmation_id: str,
+) -> None:
+    """Ask the agent to open the page again after a failed fetch.
+
+    fetch_url memoises results, so the cached failure has to go first or the
+    retry would return it unchanged.
+    """
+    fetch_url.clear_cache()
+    await query.edit_message_text(REFETCHING_MESSAGE, parse_mode=ParseMode.HTML)
+
+    try:
+        result = await intake_service.resume_intake(confirmation_id, REFETCH_FEEDBACK)
+    except ValueError:
+        logger.exception("refetch failed for confirmation %s", confirmation_id)
+        await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
+        return
+    except Exception:
+        logger.exception("Unexpected refetch error")
+        await query.edit_message_text(REVIEW_ERROR_REPLY)
+        return
+
+    if result.status != "needs_review":
+        await query.edit_message_text(
+            _terminal_text(result),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_terminal_keyboard(result),
+        )
+        return
+
+    await _show_draft(query.message, result)
+
+
 async def _handle_quick_edit(
     query,
     intake_service: IntakeService,
@@ -203,12 +253,16 @@ async def _handle_quick_edit(
 
     if action == CALLBACK_BACK:
         confirmation_id = payload
-        draft = _require_draft(intake_service, confirmation_id)
-        if draft is None:
+        record = intake_service.store.get(confirmation_id)
+        if record is None:
             await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
             return
         await query.edit_message_reply_markup(
-            reply_markup=build_review_keyboard(draft, confirmation_id),
+            reply_markup=build_review_keyboard(
+                record.draft_proposal,
+                confirmation_id,
+                record.grounding,
+            ),
         )
         return
 
@@ -229,9 +283,13 @@ async def _handle_quick_edit(
         return
 
     await query.edit_message_text(
-        render_draft_message(record.draft_proposal),
+        render_draft_message(record.draft_proposal, record.grounding),
         parse_mode=ParseMode.HTML,
-        reply_markup=build_review_keyboard(record.draft_proposal, confirmation_id),
+        reply_markup=build_review_keyboard(
+            record.draft_proposal,
+            confirmation_id,
+            record.grounding,
+        ),
     )
 
 
@@ -335,7 +393,7 @@ async def _show_draft(
     if result.draft_proposal is None:
         return
 
-    card = render_draft_message(result.draft_proposal)
+    card = render_draft_message(result.draft_proposal, result.grounding)
     if before is not None:
         changes = render_change_summary(before, result.draft_proposal)
         if changes is not None:
@@ -347,6 +405,7 @@ async def _show_draft(
         reply_markup=build_review_keyboard(
             result.draft_proposal,
             result.confirmation_id,
+            result.grounding,
         ),
     )
 

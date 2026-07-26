@@ -7,7 +7,11 @@ from sqlalchemy import DateTime, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 
 from .database_urls import to_sync_database_url
 from .models import ConfirmationRecord, ConfirmationStatus
@@ -51,6 +55,7 @@ class ConfirmationRow(Base):
     notion_project_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     manual_edits_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    grounding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ConfirmationStore:
@@ -80,10 +85,13 @@ class ConfirmationStore:
         invocation_id: str,
         request_input_call_id: str,
         review_message: str,
+        grounding: DraftGrounding | None = None,
     ) -> None:
         with self.session_factory.begin() as session:
             row = self._get_required_row(session, confirmation_id)
             row.draft_proposal_json = draft_proposal.model_dump_json()
+            if grounding is not None:
+                row.grounding_json = grounding.model_dump_json()
             row.invocation_id = invocation_id
             row.request_input_call_id = request_input_call_id
             row.review_message = review_message
@@ -213,6 +221,7 @@ class ConfirmationStore:
             manual_edits_json=json.dumps(record.manual_edits)
             if record.manual_edits
             else None,
+            grounding_json=record.grounding.model_dump_json(),
         )
 
     def _record_from_row(self, row: ConfirmationRow) -> ConfirmationRecord:
@@ -237,6 +246,7 @@ class ConfirmationStore:
             notion_project_url=row.notion_project_url,
             failure_reason=row.failure_reason,
             manual_edits=_load_manual_edits(row.manual_edits_json),
+            grounding=_load_grounding(row.grounding_json),
         )
 
     def _ensure_commit_columns(self) -> None:
@@ -247,6 +257,7 @@ class ConfirmationStore:
             "notion_project_url": "TEXT",
             "failure_reason": "TEXT",
             "manual_edits_json": "TEXT",
+            "grounding_json": "TEXT",
         }
         missing = [
             (column_name, column_type)
@@ -264,6 +275,15 @@ class ConfirmationStore:
                         f"ADD COLUMN {column_name} {column_type}"
                     )
                 )
+
+
+def _load_grounding(raw: str | None) -> DraftGrounding:
+    if not raw:
+        return DraftGrounding()
+    try:
+        return DraftGrounding.model_validate_json(raw)
+    except ValueError:
+        return DraftGrounding()
 
 
 def _load_manual_edits(raw: str | None) -> dict[str, str]:

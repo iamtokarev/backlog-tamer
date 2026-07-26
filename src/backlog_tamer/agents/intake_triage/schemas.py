@@ -33,6 +33,26 @@ class FetchedUrl(BaseModel):
     error: str | None = None
 
 
+class DraftGrounding(BaseModel):
+    """What the fetch tool actually learned, kept beside the draft.
+
+    The tool results live in ADK session state and were discarded once the
+    draft existed; persisting this lets the review card show its confidence
+    and the Notion page carry the key points.
+    """
+
+    fetch_status: Literal["success", "error", "skipped"] = "skipped"
+    fetch_error: str | None = None
+    site_name: str | None = None
+    page_title: str | None = None
+    canonical_url: str | None = None
+    key_points: list[str] = Field(default_factory=list)
+
+    @property
+    def is_degraded(self) -> bool:
+        return self.fetch_status == "error"
+
+
 class ProjectDraft(BaseModel):
     project_name: str = Field(min_length=1)
     summary: str = Field(min_length=1, max_length=600)

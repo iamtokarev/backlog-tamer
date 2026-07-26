@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.application.confirmation_store import ConfirmationStore, utc_now
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationRecord, ConfirmationStatus
@@ -17,14 +21,17 @@ class FakeNotionWriter:
         self.fail = fail
         self.calls: list[ProjectDraft] = []
         self.contexts: list[IncomingContext | None] = []
+        self.groundings: list[DraftGrounding | None] = []
 
     async def create_project_with_tasks(
         self,
         draft: ProjectDraft,
         incoming_context: IncomingContext | None = None,
+        grounding: DraftGrounding | None = None,
     ) -> NotionCommitResult:
         self.calls.append(draft)
         self.contexts.append(incoming_context)
+        self.groundings.append(grounding)
         if self.fail:
             raise RuntimeError("notion unavailable")
         return NotionCommitResult(

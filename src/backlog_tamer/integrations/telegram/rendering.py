@@ -5,7 +5,11 @@ from urllib.parse import urlparse
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.application.models import ConfirmationStatus
 
 CALLBACK_APPROVE = "approve"
@@ -14,6 +18,7 @@ CALLBACK_REJECT = "reject"
 CALLBACK_RETRY = "retry"
 CALLBACK_CANCEL = "cancel"
 CALLBACK_EDIT = "edit"
+CALLBACK_REFETCH = "refetch"
 CALLBACK_PICK = "pick"
 CALLBACK_BACK = "back"
 
@@ -127,7 +132,10 @@ def render_progress_message(incoming: IncomingContext) -> str:
     return "🧠 Triaging your note…"
 
 
-def render_draft_message(draft: ProjectDraft) -> str:
+def render_draft_message(
+    draft: ProjectDraft,
+    grounding: DraftGrounding | None = None,
+) -> str:
     """Render the review card: title first, then meta, summary, source, tasks."""
     lines = [
         f"<b>{escape(draft.project_name)}</b>",
@@ -138,13 +146,33 @@ def render_draft_message(draft: ProjectDraft) -> str:
 
     if draft.source_url:
         lines.append("")
-        lines.append(f"🔗 {_link(draft.source_url, _display_url(draft.source_url))}")
+        lines.append(_render_source(draft.source_url, grounding))
 
     if draft.tasks:
         lines.append("")
         lines.extend(f"☑︎ {escape(task)}" for task in draft.tasks)
 
+    if grounding is not None and grounding.is_degraded:
+        lines.append("")
+        lines.append(_render_fetch_warning(grounding))
+
     return "\n".join(lines)
+
+
+def _render_source(source_url: str, grounding: DraftGrounding | None) -> str:
+    line = f"🔗 {_link(source_url, _display_url(source_url))}"
+    if grounding is not None and grounding.site_name:
+        line = f"{line} · {escape(grounding.site_name)}"
+    return line
+
+
+def _render_fetch_warning(grounding: DraftGrounding) -> str:
+    """State the uncertainty rather than letting a guess look grounded."""
+    reason = f" ({escape(grounding.fetch_error)})" if grounding.fetch_error else ""
+    return (
+        f"⚠️ <i>Couldn't open the page{reason}. Drafted from the URL and your "
+        "note — check the title.</i>"
+    )
 
 
 def _render_chips(draft: ProjectDraft) -> str:
@@ -167,8 +195,20 @@ def _display_url(url: str) -> str:
 def build_review_keyboard(
     draft: ProjectDraft,
     confirmation_id: str,
+    grounding: DraftGrounding | None = None,
 ) -> InlineKeyboardMarkup:
     """Approve/reject, plus one-tap pickers for the three enum fields."""
+    refetch_row = []
+    if grounding is not None and grounding.is_degraded:
+        refetch_row = [
+            [
+                InlineKeyboardButton(
+                    "🔁 Retry fetch",
+                    callback_data=f"{CALLBACK_REFETCH}:{confirmation_id}",
+                )
+            ]
+        ]
+
     return InlineKeyboardMarkup(
         [
             [
@@ -202,6 +242,7 @@ def build_review_keyboard(
                     callback_data=f"{CALLBACK_REVISE}:{confirmation_id}",
                 ),
             ],
+            *refetch_row,
         ]
     )
 

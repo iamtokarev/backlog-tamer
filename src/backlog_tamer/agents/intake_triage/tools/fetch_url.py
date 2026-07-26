@@ -99,6 +99,11 @@ def fetch_url(url: str, tool_context: ToolContext | None = None) -> dict:
     return result
 
 
+def clear_cache() -> None:
+    """Forget cached fetches so a retry can reach the page again."""
+    _fetch_url_cached.cache_clear()
+
+
 def _persist_fetch_result(
     key: str,
     result: dict,

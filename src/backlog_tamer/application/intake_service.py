@@ -7,7 +7,11 @@ from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.agents.intake_triage.workflow import (
     build_triage_message,
     build_triage_state_delta,
@@ -21,11 +25,32 @@ from .models import ConfirmationRecord, ConfirmationStatus, IntakeResult
 
 APP_NAME = "backlog_tamer"
 REQUEST_INPUT_TOOL_NAME = "adk_request_input"
+FETCHED_CONTEXT_STATE_KEY = "fetched_context"
+MAX_GROUNDING_KEY_POINTS = 4
 _LANGSMITH_CONFIGURED = False
 
 
 def _to_session_service_db_url(database_url: str) -> str:
     return to_adk_session_database_url(database_url)
+
+
+def _match_fetched_entry(
+    fetched: dict[str, Any],
+    source_url: str | None,
+) -> Any:
+    """Prefer the entry for the draft's own source, else the first fetch."""
+    if source_url:
+        for key, payload in fetched.items():
+            if key == source_url:
+                return payload
+        for payload in fetched.values():
+            if isinstance(payload, dict) and source_url in {
+                payload.get("final_url"),
+                payload.get("canonical_url"),
+                payload.get("requested_url"),
+            }:
+                return payload
+    return next(iter(fetched.values()), None)
 
 
 def _with_manual_edits(review_reply: str, manual_edits: dict[str, str]) -> str:
@@ -94,6 +119,7 @@ class IntakeService:
             session_id=session_id,
         )
         draft = self._extract_draft_from_state(session_state)
+        grounding = self._extract_grounding(session_state, draft)
         interrupt = self._extract_request_input(events)
         confirmation = ConfirmationRecord(
             confirmation_id=str(uuid4()),
@@ -106,6 +132,7 @@ class IntakeService:
             status=ConfirmationStatus.PENDING_REVIEW,
             incoming_context=context,
             draft_proposal=draft,
+            grounding=grounding,
             review_message=interrupt["review_message"],
             created_at=utc_now(),
             updated_at=utc_now(),
@@ -115,6 +142,7 @@ class IntakeService:
             status="needs_review",
             confirmation_id=confirmation.confirmation_id,
             draft_proposal=draft,
+            grounding=grounding,
             review_message=confirmation.review_message,
         )
 
@@ -162,17 +190,20 @@ class IntakeService:
         interrupt = self._try_extract_request_input(events)
         if interrupt is not None:
             draft = self._extract_draft_from_state(session_state)
+            grounding = self._extract_grounding(session_state, draft)
             self.store.update_after_resume(
                 confirmation_id=confirmation_id,
                 draft_proposal=draft,
                 invocation_id=interrupt["invocation_id"],
                 request_input_call_id=interrupt["request_input_call_id"],
                 review_message=interrupt["review_message"],
+                grounding=grounding,
             )
             return IntakeResult(
                 status="needs_review",
                 confirmation_id=confirmation_id,
                 draft_proposal=draft,
+                grounding=grounding,
                 review_message=interrupt["review_message"],
             )
 
@@ -214,6 +245,7 @@ class IntakeService:
             result = await writer.create_project_with_tasks(
                 confirmation.draft_proposal,
                 incoming_context=confirmation.incoming_context,
+                grounding=confirmation.grounding,
             )
         except Exception as exc:
             self.store.mark_failed(
@@ -278,6 +310,37 @@ class IntakeService:
                 f"user_id={user_id}, session_id={session_id}",
             )
         return dict(session.state)
+
+    def _extract_grounding(
+        self,
+        session_state: dict[str, Any],
+        draft: ProjectDraft,
+    ) -> DraftGrounding:
+        """Summarise what fetch_url found, for the card and the Notion page."""
+        fetched = session_state.get(FETCHED_CONTEXT_STATE_KEY)
+        if not isinstance(fetched, dict) or not fetched:
+            return DraftGrounding(fetch_status="skipped")
+
+        payload = _match_fetched_entry(fetched, draft.source_url)
+        if not isinstance(payload, dict):
+            return DraftGrounding(fetch_status="skipped")
+
+        if payload.get("status") != "success":
+            return DraftGrounding(
+                fetch_status="error",
+                fetch_error=payload.get("error"),
+            )
+
+        key_points = [
+            str(point) for point in (payload.get("key_points") or []) if str(point)
+        ]
+        return DraftGrounding(
+            fetch_status="success",
+            site_name=payload.get("site_name"),
+            page_title=payload.get("title"),
+            canonical_url=payload.get("canonical_url") or payload.get("final_url"),
+            key_points=key_points[:MAX_GROUNDING_KEY_POINTS],
+        )
 
     def _extract_draft_from_state(
         self,

@@ -5,7 +5,11 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 
 
 class ConfirmationStatus(StrEnum):
@@ -28,6 +32,7 @@ class ConfirmationRecord(BaseModel):
     incoming_context: IncomingContext
     draft_proposal: ProjectDraft
     review_message: str
+    grounding: DraftGrounding = DraftGrounding()
     # Fields the user changed with the inline buttons since the agent last
     # drafted. Replayed into the next revision so the agent does not undo them.
     manual_edits: dict[str, str] = {}
@@ -43,6 +48,7 @@ class IntakeResult(BaseModel):
     status: str
     confirmation_id: str | None = None
     draft_proposal: ProjectDraft | None = None
+    grounding: DraftGrounding = DraftGrounding()
     review_message: str | None = None
     notion_project_url: str | None = None
     failure_reason: str | None = None
