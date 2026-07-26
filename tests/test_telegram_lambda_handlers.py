@@ -22,6 +22,7 @@ REQUIRED_SETTINGS_ENV = {
     "AGENT__OPENAI_API_KEY": "test-openai-key",
     "TELEGRAM__BOT_TOKEN": "test-bot-token",
     "TELEGRAM__ALLOWED_USER_ID": "42",
+    "NOTION_TOKEN": "test-notion-token",
     "NOTION_PROJECTS_DATABASE_ID": "test-projects-db",
     "NOTION_TASKS_DATABASE_ID": "test-tasks-db",
 }
