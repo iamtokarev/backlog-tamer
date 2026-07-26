@@ -42,3 +42,4 @@ class IntakeResult(BaseModel):
     draft_proposal: ProjectDraft | None = None
     review_message: str | None = None
     notion_project_url: str | None = None
+    failure_reason: str | None = None

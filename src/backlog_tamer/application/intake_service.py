@@ -206,6 +206,7 @@ class IntakeService:
                 confirmation_id=confirmation_id,
                 draft_proposal=confirmation.draft_proposal,
                 notion_project_url=failed.notion_project_url if failed else None,
+                failure_reason=str(exc),
             )
 
         self.store.mark_committed(

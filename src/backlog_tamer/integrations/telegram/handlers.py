@@ -13,8 +13,10 @@ from .parsing import build_incoming_context
 from .rendering import (
     CALLBACK_APPROVE,
     CALLBACK_REJECT,
+    CALLBACK_RETRY,
     CALLBACK_REVISE,
     REVISION_PROMPT,
+    build_retry_keyboard,
     build_review_keyboard,
     render_draft_message,
     render_terminal_message,
@@ -32,7 +34,12 @@ ALLOWED_USER_ID_KEY = "allowed_user_id"
 TELEGRAM_STATE_STORE_KEY = "telegram_state_store"
 AWAITING_REVISION_KEY = "awaiting_revision_for"
 
-ERROR_REPLY = "Something went wrong while triaging this item. Try again."
+DRAFT_ERROR_REPLY = (
+    "I couldn't draft this one — the triage agent failed. Send it again to retry."
+)
+REVIEW_ERROR_REPLY = (
+    "I couldn't apply that review step. The draft is still open — try again."
+)
 UNKNOWN_CONFIRMATION_REPLY = (
     "I lost track of that draft. Send the item again to start over."
 )
@@ -100,30 +107,28 @@ async def handle_callback(
         )
         return
 
-    if action not in {CALLBACK_APPROVE, CALLBACK_REJECT}:
+    if action not in {CALLBACK_APPROVE, CALLBACK_REJECT, CALLBACK_RETRY}:
         logger.warning("Unknown callback action: %r", action)
         return
 
     try:
-        result = await intake_service.resume_intake(confirmation_id, action)
+        if action == CALLBACK_RETRY:
+            result = await intake_service.finalize_approval(confirmation_id)
+        else:
+            result = await intake_service.resume_intake(confirmation_id, action)
     except ValueError:
         logger.exception("resume_intake failed for confirmation %s", confirmation_id)
         await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
         return
     except Exception:
         logger.exception("Unexpected resume_intake error")
-        await query.edit_message_text(ERROR_REPLY)
+        await query.edit_message_text(REVIEW_ERROR_REPLY)
         return
 
-    status = ConfirmationStatus(result.status)
-
     await query.edit_message_text(
-        render_terminal_message(
-            result.draft_proposal,
-            status,
-            result.notion_project_url,
-        ),
+        _terminal_text(result),
         parse_mode=ParseMode.HTML,
+        reply_markup=_terminal_keyboard(result),
     )
 
 
@@ -151,7 +156,7 @@ async def _handle_new_intake(
         )
     except Exception:
         logger.exception("start_intake failed")
-        await message.reply_text(ERROR_REPLY)
+        await message.reply_text(DRAFT_ERROR_REPLY)
         return
 
     await _send_draft(update, result)
@@ -195,21 +200,17 @@ async def _handle_revision_text(
         return
     except Exception:
         logger.exception("Unexpected resume_intake error during revision")
-        await message.reply_text(ERROR_REPLY)
+        await message.reply_text(REVIEW_ERROR_REPLY)
         return
 
     if result.status == "needs_review":
         await _send_draft(update, result)
         return
 
-    status = ConfirmationStatus(result.status)
     await message.reply_text(
-        render_terminal_message(
-            result.draft_proposal,
-            status,
-            result.notion_project_url,
-        ),
+        _terminal_text(result),
         parse_mode=ParseMode.HTML,
+        reply_markup=_terminal_keyboard(result),
     )
 
 
@@ -223,6 +224,22 @@ async def _send_draft(update: Update, result: IntakeResult) -> None:
         parse_mode=ParseMode.HTML,
         reply_markup=build_review_keyboard(result.confirmation_id),
     )
+
+
+def _terminal_text(result: IntakeResult) -> str:
+    return render_terminal_message(
+        result.draft_proposal,
+        ConfirmationStatus(result.status),
+        result.notion_project_url,
+        result.failure_reason,
+    )
+
+
+def _terminal_keyboard(result: IntakeResult):
+    """A failed Notion write keeps the draft, so offer the write again."""
+    if ConfirmationStatus(result.status) is not ConfirmationStatus.FAILED:
+        return None
+    return build_retry_keyboard(result.confirmation_id)
 
 
 def _get_intake_service(context: ContextTypes.DEFAULT_TYPE) -> IntakeService:

@@ -71,6 +71,29 @@ def test_finalize_approval_marks_failed_on_notion_error(tmp_path: Path):
     assert stored.failure_reason == "notion unavailable"
 
 
+def test_failed_confirmation_can_be_retried(tmp_path: Path):
+    store = _build_store(tmp_path)
+    record = _build_confirmation()
+    store.create_pending(record)
+    writer = FakeNotionWriter(fail=True)
+    service = _build_service(store, writer)
+
+    failed = asyncio.run(service.finalize_approval(record.confirmation_id))
+    writer.fail = False
+    retried = asyncio.run(service.finalize_approval(record.confirmation_id))
+
+    assert failed.status == ConfirmationStatus.FAILED.value
+    assert failed.failure_reason == "notion unavailable"
+    assert retried.status == ConfirmationStatus.COMMITTED.value
+    assert retried.notion_project_url == "https://notion.so/project-id"
+    assert len(writer.calls) == 2
+
+    stored = store.get(record.confirmation_id)
+    assert stored is not None
+    assert stored.status == ConfirmationStatus.COMMITTED
+    assert stored.failure_reason is None
+
+
 def test_rejected_confirmation_never_calls_notion(tmp_path: Path):
     store = _build_store(tmp_path)
     record = _build_confirmation()

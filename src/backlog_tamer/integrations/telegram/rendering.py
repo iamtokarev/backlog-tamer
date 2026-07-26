@@ -11,6 +11,7 @@ from backlog_tamer.application.models import ConfirmationStatus
 CALLBACK_APPROVE = "approve"
 CALLBACK_REVISE = "revise"
 CALLBACK_REJECT = "reject"
+CALLBACK_RETRY = "retry"
 
 REVISION_PROMPT = "✏️ Send your revision as a reply."
 
@@ -103,13 +104,40 @@ def render_terminal_message(
     draft: ProjectDraft,
     status: ConfirmationStatus,
     notion_project_url: str | None = None,
+    failure_reason: str | None = None,
 ) -> str:
     body = render_draft_message(draft)
     badge = _terminal_badge(status)
+    if status is ConfirmationStatus.FAILED:
+        reason = _short_failure_reason(failure_reason)
+        return f"{badge}\n{reason}\n\n{body}"
     if notion_project_url:
         link = _link(notion_project_url, notion_project_url)
         return f"{badge}\n<b>Notion:</b> {link}\n\n{body}"
     return f"{badge}\n\n{body}"
+
+
+def build_retry_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🔁 Retry save",
+                    callback_data=f"{CALLBACK_RETRY}:{confirmation_id}",
+                )
+            ]
+        ]
+    )
+
+
+def _short_failure_reason(failure_reason: str | None) -> str:
+    """One readable line: exception strings are long and often carry a URL."""
+    if not failure_reason:
+        return "Your draft is safe — press retry to try Notion again."
+    reason = " ".join(failure_reason.split())
+    if len(reason) > 160:
+        reason = f"{reason[:157]}…"
+    return f"{escape(reason)}\nYour draft is safe — press retry to try Notion again."
 
 
 def _terminal_badge(status: ConfirmationStatus) -> str:

@@ -94,7 +94,11 @@ class ConfirmationStore:
         now = utc_now()
         with self.session_factory.begin() as session:
             row = self._get_required_row(session, confirmation_id)
-            if row.status == ConfirmationStatus.PENDING_REVIEW.value:
+            # FAILED is retryable: the draft is intact, only the Notion write lost.
+            if row.status in {
+                ConfirmationStatus.PENDING_REVIEW.value,
+                ConfirmationStatus.FAILED.value,
+            }:
                 row.status = ConfirmationStatus.COMMITTING.value
                 row.updated_at = now
                 row.failure_reason = None
