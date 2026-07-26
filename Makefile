@@ -13,11 +13,13 @@ unhide-venv:
 format-check:
 	uv run ruff format --check
 
+# PYTHONPATH mirrors pythonpath = ["src"] in pyproject, so these run the same
+# way tests import the package and do not depend on the editable install.
 run:
-	uv run python -m backlog_tamer.integrations.telegram.bot
+	PYTHONPATH=src uv run python -m backlog_tamer.integrations.telegram.bot
 
 webhook-dev:
-	uv run python -m backlog_tamer.integrations.telegram.webhook_dev --host $(HOST) --port $(PORT) --path $(WEBHOOK_PATH) $(WEBHOOK_PUBLIC_URL_ARG)
+	PYTHONPATH=src uv run python -m backlog_tamer.integrations.telegram.webhook_dev --host $(HOST) --port $(PORT) --path $(WEBHOOK_PATH) $(WEBHOOK_PUBLIC_URL_ARG)
 
 webhook-info:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
