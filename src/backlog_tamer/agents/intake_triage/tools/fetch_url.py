@@ -666,6 +666,22 @@ def _load_pdf_reader():
     return PdfReader
 
 
+def missing_optional_dependencies() -> list[str]:
+    """Return the extraction dependencies that are absent from this environment.
+
+    Both loaders above swallow ImportError and their callers fall back to a
+    weaker extraction path, so a dependency missing from the deployed image
+    degrades output quality without ever raising. The deploy healthcheck calls
+    this so that failure mode surfaces instead of going unnoticed.
+    """
+    missing: list[str] = []
+    if _build_soup("<html><title>probe</title></html>") is None:
+        missing.append("beautifulsoup4")
+    if _load_pdf_reader() is None:
+        missing.append("pypdf")
+    return missing
+
+
 def _clean_lines(text: str) -> list[str]:
     lines: list[str] = []
     seen: set[str] = set()

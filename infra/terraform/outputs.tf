@@ -3,6 +3,16 @@ output "ecr_repository_url" {
   value       = aws_ecr_repository.app.repository_url
 }
 
+output "webhook_function_name" {
+  description = "Name of the webhook receiver Lambda, used by the post-deploy smoke test."
+  value       = aws_lambda_function.webhook.function_name
+}
+
+output "worker_function_name" {
+  description = "Name of the SQS worker Lambda, used by the post-deploy smoke test."
+  value       = aws_lambda_function.worker.function_name
+}
+
 output "image_uri" {
   description = "Container image digest URI Terraform expects for Lambda."
   value       = local.app_image_uri

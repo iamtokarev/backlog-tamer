@@ -20,9 +20,28 @@ make webhook-clear  # Delete Telegram webhook
 
 Run a single test: `uv run pytest tests/test_telegram_webhook.py -v` (or `-k <pattern>`). `pythonpath = ["src"]` is set in pyproject, so tests import `backlog_tamer` directly.
 
-CI runs `ruff format --check`, `ruff check`, and `pytest` with `--locked` — keep `uv.lock` in sync when changing dependencies. Deploy to AWS runs automatically from GitHub Actions after CI passes on `main`.
+CI runs `ruff format --check`, `ruff check`, and `pytest` with `--locked` — keep `uv.lock` in sync when changing dependencies.
 
 Requires a `.env` file (see `.env.example`). Settings use pydantic-settings with `__` as the nested delimiter (e.g. `TELEGRAM__BOT_TOKEN` maps to `Settings.telegram.bot_token`); see `src/backlog_tamer/config.py`.
+
+## Releases and deploys
+
+Merging to `main` does **not** deploy. Production ships from releases:
+
+1. Push conventional commits (`feat:`, `fix:`, …) to `main`. `release.yml` keeps a standing release PR open that bumps `pyproject.toml`, relocks `uv.lock`, and writes `CHANGELOG.md`.
+2. Merge the release PR. release-please tags `vX.Y.Z` and cuts a GitHub release, CI re-runs as a gate, then `deploy.yml` builds the arm64 image, pushes it to ECR tagged `vX.Y.Z`, applies Terraform, and smoke-tests both Lambdas.
+
+The smoke test invokes the worker with `{"healthcheck": true}` and asserts the reported version matches the tag, so a deploy that silently didn't take fails the job. `_healthcheck` in `lambda_handlers.py` eagerly imports the agent/Notion modules and calls `fetch_url.missing_optional_dependencies()` — the HTML and PDF extraction paths fall back silently when a dependency is missing from the image, so that probe is the only thing that surfaces it.
+
+Roll back by dispatching the Deploy workflow with a previous tag:
+
+```sh
+gh workflow run deploy.yml -f version=v0.1.1
+```
+
+The image is already in ECR, so the build is skipped and only `terraform apply` runs. The ECR lifecycle policy keeps the last 10 `v`-tagged images as rollback targets. Version bumps are release-please's job — don't edit `version` in `pyproject.toml` by hand.
+
+`bootstrap-sha` in `release-please-config.json` is the history boundary for the first release (the repo had no `v*` tags). It can be dropped once `v0.2.0` exists.
 
 ## Architecture
 

@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
+from backlog_tamer.agents.intake_triage.tools import fetch_url
 from backlog_tamer.integrations.telegram.lambda_handlers import (
     QUEUE_URL_ENV,
     SECRET_ARN_ENV,
     webhook_handler,
+    worker_handler,
 )
 
 
@@ -82,6 +86,41 @@ def test_webhook_handler_rejects_invalid_secret(monkeypatch):
 
     assert result["statusCode"] == 403
     assert result["body"] == "forbidden"
+
+
+def test_worker_handler_healthcheck_reports_version(monkeypatch):
+    monkeypatch.delenv(SECRET_ARN_ENV, raising=False)
+    monkeypatch.setattr(
+        "backlog_tamer.integrations.telegram.lambda_handlers._SECRETS_LOADED",
+        False,
+    )
+
+    result = worker_handler({"healthcheck": True}, SimpleNamespace())
+
+    assert result["ok"] is True
+    assert result["version"]
+
+
+def test_worker_handler_healthcheck_fails_on_missing_extraction_dependency(
+    monkeypatch,
+):
+    monkeypatch.delenv(SECRET_ARN_ENV, raising=False)
+    monkeypatch.setattr(
+        "backlog_tamer.integrations.telegram.lambda_handlers._SECRETS_LOADED",
+        False,
+    )
+    monkeypatch.setattr(
+        "backlog_tamer.agents.intake_triage.tools.fetch_url"
+        ".missing_optional_dependencies",
+        lambda: ["beautifulsoup4"],
+    )
+
+    with pytest.raises(RuntimeError, match="beautifulsoup4"):
+        worker_handler({"healthcheck": True}, SimpleNamespace())
+
+
+def test_missing_optional_dependencies_is_empty_when_installed():
+    assert fetch_url.missing_optional_dependencies() == []
 
 
 def _lambda_event(payload: dict, *, secret: str) -> dict:

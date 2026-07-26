@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "python",
+  "bump-minor-pre-major": true,
+  "include-v-in-tags": true,
+  "bootstrap-sha": "8712113849f5342b821beb5af4e576292c37fbdf",
+  "packages": {
+    ".": {
+      "package-name": "backlog-tamer",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}
