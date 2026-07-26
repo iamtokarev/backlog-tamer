@@ -1,3 +1,3 @@
-from .writer import NotionCommitResult, NotionWriter
+from .writer import NotionCommitResult, NotionSchemaReport, NotionWriter
 
-__all__ = ["NotionCommitResult", "NotionWriter"]
+__all__ = ["NotionCommitResult", "NotionSchemaReport", "NotionWriter"]
