@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 
-from telegram import Update
+from telegram import ForceReply, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
+from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationStatus, IntakeResult
 
@@ -13,18 +14,22 @@ from .parsing import build_incoming_context
 from .rendering import (
     CALLBACK_APPROVE,
     CALLBACK_BACK,
+    CALLBACK_CANCEL,
     CALLBACK_EDIT,
     CALLBACK_PICK,
     CALLBACK_REJECT,
     CALLBACK_RETRY,
     CALLBACK_REVISE,
     DRAFT_FIELD_NAMES,
-    REVISION_PROMPT,
+    REVISION_PLACEHOLDER,
+    build_cancel_revision_keyboard,
     build_picker_keyboard,
     build_retry_keyboard,
     build_review_keyboard,
+    render_change_summary,
     render_draft_message,
     render_progress_message,
+    render_revision_prompt,
     render_terminal_message,
 )
 from .state import (
@@ -88,13 +93,17 @@ async def handle_callback(
         await query.answer()
         return
 
-    await query.answer()
-
     try:
         action, confirmation_id = query.data.split(":", 1)
     except ValueError:
+        await query.answer()
         logger.warning("Malformed callback_data: %r", query.data)
         return
+
+    # A callback query may only be answered once, so the toast goes here.
+    await query.answer(
+        text="Revision cancelled." if action == CALLBACK_CANCEL else None,
+    )
 
     intake_service = _get_intake_service(context)
 
@@ -107,15 +116,42 @@ async def handle_callback(
         if identity is None:
             return
         user_id, chat_id = identity
+        draft = _require_draft(intake_service, confirmation_id)
+        if draft is None:
+            await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
+            return
         set_session_revision(
             context,
             user_id=user_id,
             chat_id=chat_id,
             confirmation_id=confirmation_id,
         )
+        # The card shows it is waiting, and offers the way out: without this
+        # the next message sent for any reason is swallowed as feedback.
+        await query.edit_message_reply_markup(
+            reply_markup=build_cancel_revision_keyboard(confirmation_id),
+        )
         await query.message.reply_text(
-            REVISION_PROMPT,
+            render_revision_prompt(draft),
             parse_mode=ParseMode.HTML,
+            reply_markup=ForceReply(
+                selective=True,
+                input_field_placeholder=REVISION_PLACEHOLDER,
+            ),
+        )
+        return
+
+    if action == CALLBACK_CANCEL:
+        identity = state_identity_from_update(update)
+        if identity is not None:
+            user_id, chat_id = identity
+            get_session_revision(context, user_id=user_id, chat_id=chat_id)
+        draft = _require_draft(intake_service, confirmation_id)
+        if draft is None:
+            await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
+            return
+        await query.edit_message_reply_markup(
+            reply_markup=build_review_keyboard(draft, confirmation_id),
         )
         return
 
@@ -264,6 +300,7 @@ async def _handle_revision_text(
         return
 
     intake_service = _get_intake_service(context)
+    before = _require_draft(intake_service, confirmation_id)
 
     progress = await message.reply_text(REVISING_MESSAGE, parse_mode=ParseMode.HTML)
 
@@ -279,7 +316,7 @@ async def _handle_revision_text(
         return
 
     if result.status == "needs_review":
-        await _show_draft(progress, result)
+        await _show_draft(progress, result, before=before)
         return
 
     await progress.edit_text(
@@ -289,13 +326,23 @@ async def _handle_revision_text(
     )
 
 
-async def _show_draft(progress_message, result: IntakeResult) -> None:
+async def _show_draft(
+    progress_message,
+    result: IntakeResult,
+    before: ProjectDraft | None = None,
+) -> None:
     """Turn the progress placeholder into the review card."""
     if result.draft_proposal is None:
         return
 
+    card = render_draft_message(result.draft_proposal)
+    if before is not None:
+        changes = render_change_summary(before, result.draft_proposal)
+        if changes is not None:
+            card = f"{changes}\n\n{card}"
+
     await progress_message.edit_text(
-        render_draft_message(result.draft_proposal),
+        card,
         parse_mode=ParseMode.HTML,
         reply_markup=build_review_keyboard(
             result.draft_proposal,

@@ -12,6 +12,7 @@ CALLBACK_APPROVE = "approve"
 CALLBACK_REVISE = "revise"
 CALLBACK_REJECT = "reject"
 CALLBACK_RETRY = "retry"
+CALLBACK_CANCEL = "cancel"
 CALLBACK_EDIT = "edit"
 CALLBACK_PICK = "pick"
 CALLBACK_BACK = "back"
@@ -28,7 +29,7 @@ DRAFT_FIELD_NAMES = {
     FIELD_TYPE: "resource_type",
 }
 
-REVISION_PROMPT = "✏️ Send your revision as a reply."
+REVISION_PLACEHOLDER = "What should change?"
 
 RESOURCE_TYPE_ICONS = {
     "article": "📄",
@@ -67,6 +68,56 @@ FIELD_ICONS = {
     FIELD_INTENT: INTENT_ICONS,
     FIELD_TYPE: RESOURCE_TYPE_ICONS,
 }
+
+
+def render_revision_prompt(draft: ProjectDraft) -> str:
+    return (
+        f"✏️ What should I change about <b>{escape(draft.project_name)}</b>?\n"
+        "Reply with your feedback, or press Cancel on the draft above."
+    )
+
+
+def render_change_summary(before: ProjectDraft, after: ProjectDraft) -> str | None:
+    """One line naming what the revision actually moved."""
+    changes: list[str] = []
+    for field, label in (
+        ("priority", "priority"),
+        ("intent", "intent"),
+        ("resource_type", "type"),
+    ):
+        old = getattr(before, field)
+        new = getattr(after, field)
+        if old != new:
+            changes.append(f"{label} {old} → {new}")
+
+    if len(before.tasks) != len(after.tasks):
+        changes.append(f"tasks {len(before.tasks)} → {len(after.tasks)}")
+    elif before.tasks != after.tasks:
+        changes.append("tasks rewritten")
+
+    if before.project_name != after.project_name:
+        changes.append("title rewritten")
+    if before.summary != after.summary:
+        changes.append("summary rewritten")
+    if before.source_url != after.source_url:
+        changes.append("source changed")
+
+    if not changes:
+        return None
+    return f"✏️ <i>Changed: {escape(' · '.join(changes))}</i>"
+
+
+def build_cancel_revision_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✕ Cancel revision",
+                    callback_data=f"{CALLBACK_CANCEL}:{confirmation_id}",
+                )
+            ]
+        ]
+    )
 
 
 def render_progress_message(incoming: IncomingContext) -> str:

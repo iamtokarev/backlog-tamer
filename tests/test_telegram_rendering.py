@@ -7,8 +7,10 @@ from backlog_tamer.agents.intake_triage.schemas import (
 )
 from backlog_tamer.application.models import ConfirmationStatus
 from backlog_tamer.integrations.telegram.rendering import (
+    render_change_summary,
     render_draft_message,
     render_progress_message,
+    render_revision_prompt,
     render_terminal_message,
 )
 
@@ -108,6 +110,39 @@ def test_progress_message_falls_back_when_there_is_no_link():
     incoming = IncomingContext(raw_text="idea: try duckdb for the eval store")
 
     assert render_progress_message(incoming) == "🧠 Triaging your note…"
+
+
+def test_change_summary_names_moved_fields():
+    before = _draft()
+    after = _draft(priority="Medium", tasks=["Read", "Prototype"])
+
+    summary = render_change_summary(before, after)
+
+    assert summary is not None
+    assert "priority High → Medium" in summary
+    assert "tasks 1 → 2" in summary
+
+
+def test_change_summary_reports_rewritten_prose_without_quoting_it():
+    before = _draft()
+    after = _draft(summary="A much shorter summary.")
+
+    summary = render_change_summary(before, after)
+
+    assert summary is not None
+    assert "summary rewritten" in summary
+    assert "A much shorter summary." not in summary
+
+
+def test_change_summary_is_absent_when_nothing_moved():
+    assert render_change_summary(_draft(), _draft()) is None
+
+
+def test_revision_prompt_names_the_draft_being_revised():
+    prompt = render_revision_prompt(_draft())
+
+    assert "LangGraph: build stateful multi-agent workflows" in prompt
+    assert "Cancel" in prompt
 
 
 def test_terminal_message_shows_status_badge_and_notion_link():
