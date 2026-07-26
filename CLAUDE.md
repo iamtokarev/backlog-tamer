@@ -43,6 +43,14 @@ The image is already in ECR, so the build is skipped and only `terraform apply` 
 
 `bootstrap-sha` in `release-please-config.json` is the history boundary for the first release (the repo had no `v*` tags). It can be dropped once `v0.2.0` exists.
 
+The first release cut `backlog-tamer-v0.2.0`, not `v0.2.0`: release-please prefixes the component name unless `include-component-in-tag` is false, which it now is. That one tag keeps its old name, so rolling back to it needs the full string:
+
+```sh
+gh workflow run deploy.yml -f version=backlog-tamer-v0.2.0
+```
+
+It is also outside the ECR lifecycle rule that retains `v`-prefixed releases, so it is only held by the catch-all "keep last 20 images" rule. Releases from `v0.3.0` on are protected normally.
+
 ## Notion database schema
 
 Property names live in `integrations/notion/writer.py` as module constants —
