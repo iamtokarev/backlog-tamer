@@ -4,20 +4,20 @@ import asyncio
 from datetime import date
 from typing import Any
 
+import pytest
+
 from backlog_tamer.agents.intake_triage.schemas import (
     IncomingContext,
     ProjectDraft,
     SourceLink,
 )
-from backlog_tamer.integrations.notion.writer import NotionWriter
+from backlog_tamer.integrations.notion.writer import NotionApiError, NotionWriter
 
 
 class FakeResponse:
-    def __init__(self, payload: dict[str, Any]):
+    def __init__(self, payload: dict[str, Any], status_code: int = 200):
         self._payload = payload
-
-    def raise_for_status(self) -> None:
-        return None
+        self.status_code = status_code
 
     def json(self) -> dict[str, Any]:
         return self._payload
@@ -104,7 +104,8 @@ def test_builds_project_payload_with_summary_source_and_fixed_properties():
     payload = writer.build_project_payload(draft, captured_at=date(2026, 7, 26))
 
     assert payload["parent"] == {"database_id": "projects-db"}
-    assert payload["template"] == {"type": "default"}
+    # Notion refuses a page that carries both a template and children.
+    assert "template" not in payload
     properties = payload["properties"]
     assert (
         properties["Project name"]["title"][0]["text"]["content"]
@@ -611,3 +612,59 @@ def test_task_properties_are_filtered_against_the_tasks_database():
         "Priority",
         "Projects",
     }
+
+
+def test_a_project_page_never_sends_a_template_alongside_its_body():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+    draft = ProjectDraft(
+        project_name="Example",
+        summary="Example summary.",
+        resource_type="article",
+        intent="learn",
+        priority="Low",
+        tasks=["Read"],
+    )
+
+    payload = writer.build_project_payload(draft)
+
+    assert payload["children"]
+    assert "template" not in payload
+
+
+def test_notion_error_message_reaches_the_caller():
+    class FailingClient(FakeClient):
+        async def post(self, url: str, *, headers, json) -> FakeResponse:
+            return FakeResponse(
+                {
+                    "object": "error",
+                    "status": 400,
+                    "code": "validation_error",
+                    "message": "Tags is expected to be multi_select.",
+                },
+                status_code=400,
+            )
+
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+        client=FailingClient(),
+    )
+    draft = ProjectDraft(
+        project_name="Example",
+        summary="Example summary.",
+        resource_type="article",
+        intent="learn",
+        priority="Low",
+        tasks=["Read"],
+    )
+
+    with pytest.raises(NotionApiError) as failure:
+        asyncio.run(writer.create_project_with_tasks(draft))
+
+    assert "Tags is expected to be multi_select." in str(failure.value)
+    assert "400" in str(failure.value)

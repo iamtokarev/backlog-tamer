@@ -186,9 +186,10 @@ class NotionWriter:
         if draft.source_url:
             properties[PROJECT_SOURCE_PROPERTY] = {"url": draft.source_url}
 
+        # No "template" here: Notion rejects a page that sends both a template
+        # and children, and the body we build is the point of the page.
         return {
             "parent": {"database_id": self.projects_database_id},
-            "template": {"type": "default"},
             "icon": _emoji(RESOURCE_TYPE_EMOJI.get(draft.resource_type, "❔")),
             "properties": properties,
             "children": build_project_children(
@@ -252,7 +253,7 @@ class NotionWriter:
                         "page_size": 1,
                     },
                 )
-                response.raise_for_status()
+                _raise_for_notion_error(response)
                 results = response.json().get("results") or []
             except Exception:
                 # A duplicate check is a convenience; never block the commit.
@@ -416,7 +417,7 @@ class NotionWriter:
             f"{NOTION_API_BASE_URL}/databases/{database_id}",
             headers=self._headers(),
         )
-        response.raise_for_status()
+        _raise_for_notion_error(response)
         properties = response.json().get("properties", {})
         return set(properties) if isinstance(properties, dict) else set()
 
@@ -439,7 +440,7 @@ class NotionWriter:
             headers=self._headers(),
             json=payload,
         )
-        response.raise_for_status()
+        _raise_for_notion_error(response)
         return response.json()
 
     def _headers(self) -> dict[str, str]:
@@ -619,6 +620,33 @@ def _normalized_topics(topics: list[str]) -> list[str]:
         if cleaned and cleaned not in seen:
             seen.append(cleaned)
     return seen[:3]
+
+
+class NotionApiError(RuntimeError):
+    pass
+
+
+def _raise_for_notion_error(response) -> None:
+    """Surface Notion's explanation, not just the status line.
+
+    A 400 from httpx reads "Client error '400 Bad Request' for url ...", which
+    tells the user nothing about which property or block was rejected.
+    """
+    if response.status_code < 400:
+        return
+
+    message = None
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        message = body.get("message") or body.get("code")
+
+    raise NotionApiError(
+        f"Notion rejected the write ({response.status_code}): "
+        f"{message or 'no reason given'}"
+    )
 
 
 def _require_text(payload: dict[str, Any], key: str) -> str:
