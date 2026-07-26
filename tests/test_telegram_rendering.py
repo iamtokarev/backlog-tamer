@@ -55,11 +55,35 @@ def test_draft_message_survives_markdown_characters_in_titles():
     assert "pytest_asyncio *and* [markers]" in message
 
 
+def test_draft_message_leads_with_the_title_then_a_single_chip_line():
+    message = render_draft_message(_draft())
+    first, second = message.split("\n")[:2]
+
+    assert first == "<b>LangGraph: build stateful multi-agent workflows</b>"
+    assert second == "📘 documentation · 🔨 build · 🔺 High"
+
+
+def test_draft_message_links_the_domain_not_the_raw_url():
+    message = render_draft_message(_draft())
+
+    assert (
+        '🔗 <a href="https://blog.langchain.com/langgraph-multi-agent-workflows/">'
+        "blog.langchain.com</a>" in message
+    )
+
+
+def test_draft_message_strips_www_from_the_displayed_domain():
+    message = render_draft_message(_draft(source_url="https://www.arxiv.org/abs/1"))
+
+    assert ">arxiv.org</a>" in message
+
+
 def test_draft_message_handles_a_draft_without_tasks_or_source():
     message = render_draft_message(_draft(tasks=[], source_url=None))
 
-    assert "Source" not in message
-    assert message.endswith("<b>Tasks:</b>\n")
+    assert "🔗" not in message
+    assert "☑︎" not in message
+    assert message.endswith("Graph of stateful nodes with explicit control flow.")
 
 
 def test_terminal_message_shows_status_badge_and_notion_link():
