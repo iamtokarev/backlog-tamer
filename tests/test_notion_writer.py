@@ -34,7 +34,14 @@ ALL_PROJECT_PROPERTIES = {
     "Captured",
     "Summary",
 }
-ALL_TASK_PROPERTIES = {"Task name", "Status", "Priority", "Projects"}
+ALL_TASK_PROPERTIES = {
+    "Task name",
+    "Status",
+    "Priority",
+    "Projects",
+    "Due date",
+    "Source",
+}
 
 
 class FakeClient:
@@ -324,7 +331,8 @@ def test_commit_reads_the_schema_once_per_writer():
     asyncio.run(writer.create_project_with_tasks(draft))
     asyncio.run(writer.create_project_with_tasks(draft))
 
-    assert len(client.gets) == 1
+    assert len(client.gets) == 2
+    assert len(set(client.gets)) == 2
 
 
 def test_schema_report_is_healthy_when_every_property_exists():
@@ -517,4 +525,89 @@ def test_topic_tags_drop_duplicates_and_commas():
 
     assert writer.build_project_payload(draft)["properties"]["Tags"] == {
         "multi_select": [{"name": "rag"}, {"name": "vector search"}]
+    }
+
+
+def test_task_gets_a_due_date_from_priority_and_carries_the_source():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+
+    payload = writer.build_task_payload(
+        task_name="Explore",
+        priority="High",
+        project_id="project-page-id",
+        source_url="https://example.com/adk",
+        today=date(2026, 7, 26),
+    )
+
+    properties = payload["properties"]
+    assert properties["Due date"] == {"date": {"start": "2026-07-29"}}
+    assert properties["Source"] == {"url": "https://example.com/adk"}
+
+
+def test_medium_priority_tasks_get_a_softer_due_date():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+
+    payload = writer.build_task_payload(
+        task_name="Read",
+        priority="Medium",
+        project_id="project-page-id",
+        today=date(2026, 7, 26),
+    )
+
+    assert payload["properties"]["Due date"] == {"date": {"start": "2026-08-09"}}
+
+
+def test_low_priority_tasks_are_left_unscheduled():
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+
+    payload = writer.build_task_payload(
+        task_name="Read",
+        priority="Low",
+        project_id="project-page-id",
+        today=date(2026, 7, 26),
+    )
+
+    assert "Due date" not in payload["properties"]
+
+
+def test_task_properties_are_filtered_against_the_tasks_database():
+    client = FakeClient(
+        task_properties={"Task name", "Status", "Priority", "Projects"},
+    )
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+        client=client,
+    )
+    draft = ProjectDraft(
+        project_name="Example",
+        summary="Example summary.",
+        resource_type="article",
+        intent="learn",
+        priority="High",
+        source_url="https://example.com",
+        tasks=["Read"],
+    )
+
+    asyncio.run(writer.create_project_with_tasks(draft))
+
+    _, task_payload = client.posts[1]
+    assert set(task_payload["properties"]) == {
+        "Task name",
+        "Status",
+        "Priority",
+        "Projects",
     }

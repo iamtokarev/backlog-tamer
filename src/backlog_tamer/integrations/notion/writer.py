@@ -5,7 +5,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -39,6 +39,8 @@ TASK_NAME_PROPERTY = "Task name"
 TASK_STATUS_PROPERTY = "Status"
 TASK_PRIORITY_PROPERTY = "Priority"
 TASK_PROJECT_PROPERTY = "Projects"
+TASK_DUE_PROPERTY = "Due date"
+TASK_SOURCE_PROPERTY = "Source"
 
 # Properties the writer sends but a database may legitimately not have yet.
 # Anything outside this set is required and reported as missing.
@@ -50,7 +52,10 @@ OPTIONAL_PROJECT_PROPERTIES = frozenset(
         PROJECT_CAPTURED_PROPERTY,
     }
 )
-OPTIONAL_TASK_PROPERTIES: frozenset[str] = frozenset()
+OPTIONAL_TASK_PROPERTIES = frozenset({TASK_DUE_PROPERTY, TASK_SOURCE_PROPERTY})
+
+# A soft first-touch date, so an item has a "when" and can be scheduled.
+PRIORITY_DUE_DAYS = {"High": 3, "Medium": 14, "Low": None}
 
 RESOURCE_TYPE_EMOJI = {
     "article": "📄",
@@ -97,7 +102,7 @@ class NotionWriter:
         self.tasks_database_id = tasks_database_id
         self.api_version = api_version
         self.client = client
-        self._project_property_cache: set[str] | None = None
+        self._property_cache: dict[str, set[str]] = {}
 
     @classmethod
     def from_settings(cls, settings: Settings) -> NotionWriter:
@@ -119,6 +124,7 @@ class NotionWriter:
         async with self._session() as client:
             payload = await self._fit_to_schema(
                 client,
+                self.projects_database_id,
                 self.build_project_payload(
                     draft,
                     incoming_context=incoming_context,
@@ -129,18 +135,21 @@ class NotionWriter:
             project_id = _require_text(project, "id")
             project_url = _require_text(project, "url")
 
-            tasks = await asyncio.gather(
-                *(
-                    self._post_page(
-                        client,
-                        self.build_task_payload(
-                            task_name=task_name,
-                            priority=draft.priority,
-                            project_id=project_id,
-                        ),
-                    )
-                    for task_name in draft.tasks
+            task_payloads = [
+                await self._fit_to_schema(
+                    client,
+                    self.tasks_database_id,
+                    self.build_task_payload(
+                        task_name=task_name,
+                        priority=draft.priority,
+                        project_id=project_id,
+                        source_url=draft.source_url,
+                    ),
                 )
+                for task_name in draft.tasks
+            ]
+            tasks = await asyncio.gather(
+                *(self._post_page(client, payload) for payload in task_payloads)
             )
 
         return NotionCommitResult(
@@ -189,30 +198,42 @@ class NotionWriter:
         task_name: str,
         priority: str,
         project_id: str,
+        source_url: str | None = None,
+        today: date | None = None,
     ) -> dict[str, Any]:
+        properties: dict[str, Any] = {
+            TASK_NAME_PROPERTY: _title(task_name),
+            TASK_STATUS_PROPERTY: _status(TASK_STATUS),
+            TASK_PRIORITY_PROPERTY: _select(priority),
+            TASK_PROJECT_PROPERTY: {"relation": [{"id": project_id}]},
+        }
+
+        due_on = _due_date(priority, today)
+        if due_on is not None:
+            properties[TASK_DUE_PROPERTY] = _date(due_on)
+        if source_url:
+            # So the task is actionable without opening the project first.
+            properties[TASK_SOURCE_PROPERTY] = {"url": source_url}
+
         return {
             "parent": {"database_id": self.tasks_database_id},
             "template": {"type": "default"},
-            "properties": {
-                TASK_NAME_PROPERTY: _title(task_name),
-                TASK_STATUS_PROPERTY: _status(TASK_STATUS),
-                TASK_PRIORITY_PROPERTY: _select(priority),
-                TASK_PROJECT_PROPERTY: {"relation": [{"id": project_id}]},
-            },
+            "properties": properties,
         }
 
     async def _fit_to_schema(
         self,
         client: httpx.AsyncClient,
+        database_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        """Drop properties the Projects database does not have.
+        """Drop properties the target database does not have.
 
-        Source, Type, Intent and Captured are recent additions; a workspace
-        that has not added the columns yet still gets a usable page instead of
-        a 400 at commit time.
+        Source, Type, Intent, Captured and Due date are recent additions; a
+        workspace that has not added the columns yet still gets a usable page
+        instead of a 400 at commit time.
         """
-        known = await self._known_project_properties(client)
+        known = await self._known_properties(client, database_id)
         if known is None:
             return payload
 
@@ -222,7 +243,8 @@ class NotionWriter:
             return payload
 
         logger.warning(
-            "Skipping Notion properties missing from the Projects database: %s",
+            "Skipping Notion properties missing from database %s: %s",
+            database_id,
             ", ".join(unknown),
         )
         return {
@@ -232,23 +254,24 @@ class NotionWriter:
             },
         }
 
-    async def _known_project_properties(
+    async def _known_properties(
         self,
         client: httpx.AsyncClient,
+        database_id: str,
     ) -> set[str] | None:
-        if self._project_property_cache is not None:
-            return self._project_property_cache
+        if database_id in self._property_cache:
+            return self._property_cache[database_id]
         try:
-            self._project_property_cache = await self._database_properties(
+            self._property_cache[database_id] = await self._database_properties(
                 client,
-                self.projects_database_id,
+                database_id,
             )
         except Exception:
             # Never block a commit on the probe: send everything and let
             # Notion be the judge.
-            logger.warning("Could not read the Projects database schema.")
+            logger.warning("Could not read the schema of database %s.", database_id)
             return None
-        return self._project_property_cache
+        return self._property_cache[database_id]
 
     async def describe_schema(self) -> NotionSchemaReport:
         """Compare what the writer sends against what the databases have.
@@ -282,6 +305,7 @@ class NotionWriter:
                 task_name="probe",
                 priority="Medium",
                 project_id="probe",
+                source_url="https://example.com",
             )["properties"]
         )
 
@@ -451,6 +475,13 @@ def _text_fragments(value: str) -> list[dict[str, Any]]:
         {"type": "text", "text": {"content": value[index : index + limit]}}
         for index in range(0, max(len(value), 1), limit)
     ]
+
+
+def _due_date(priority: str, today: date | None = None) -> date | None:
+    days = PRIORITY_DUE_DAYS.get(priority)
+    if days is None:
+        return None
+    return (today or date.today()) + timedelta(days=days)
 
 
 def _date(value: date) -> dict[str, Any]:
