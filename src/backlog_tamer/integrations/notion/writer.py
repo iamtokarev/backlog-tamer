@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,25 +65,29 @@ class NotionWriter:
         self,
         draft: ProjectDraft,
     ) -> NotionCommitResult:
-        project_payload = self.build_project_payload(draft)
-        project = await self._post_page(project_payload)
-        project_id = _require_text(project, "id")
-        project_url = _require_text(project, "url")
+        async with self._session() as client:
+            project = await self._post_page(client, self.build_project_payload(draft))
+            project_id = _require_text(project, "id")
+            project_url = _require_text(project, "url")
 
-        task_ids: list[str] = []
-        for task_name in draft.tasks:
-            task_payload = self.build_task_payload(
-                task_name=task_name,
-                priority=draft.priority,
-                project_id=project_id,
+            tasks = await asyncio.gather(
+                *(
+                    self._post_page(
+                        client,
+                        self.build_task_payload(
+                            task_name=task_name,
+                            priority=draft.priority,
+                            project_id=project_id,
+                        ),
+                    )
+                    for task_name in draft.tasks
+                )
             )
-            task = await self._post_page(task_payload)
-            task_ids.append(_require_text(task, "id"))
 
         return NotionCommitResult(
             project_id=project_id,
             project_url=project_url,
-            task_ids=task_ids,
+            task_ids=[_require_text(task, "id") for task in tasks],
         )
 
     def build_project_payload(self, draft: ProjectDraft) -> dict[str, Any]:
@@ -120,24 +127,27 @@ class NotionWriter:
             },
         }
 
-    async def _post_page(self, payload: dict[str, Any]) -> dict[str, Any]:
+    @asynccontextmanager
+    async def _session(self) -> AsyncIterator[httpx.AsyncClient]:
+        """One client per commit: every page of a commit shares the connection."""
         if self.client is not None:
-            response = await self.client.post(
-                f"{NOTION_API_BASE_URL}/pages",
-                headers=self._headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
-
+            yield self.client
+            return
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                f"{NOTION_API_BASE_URL}/pages",
-                headers=self._headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
+            yield client
+
+    async def _post_page(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = await client.post(
+            f"{NOTION_API_BASE_URL}/pages",
+            headers=self._headers(),
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
 
     def _headers(self) -> dict[str, str]:
         return {
