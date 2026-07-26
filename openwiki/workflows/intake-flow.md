@@ -17,19 +17,20 @@ The intake workflow is the core product loop. It takes a raw Telegram message, r
 
 The workflow is defined in `src/backlog_tamer/agents/intake_triage/workflow.py` using Google ADK's `Workflow` class. The graph has three node types and three routes:
 
-<!-- openwiki: mermaid parse failed and this diagram was converted to a text fence so it does not break rendering. Fix the diagram source and restore the mermaid fence. Parser error: Heuristic: an unescaped angle bracket inside a label breaks rendering; rephrase the label. -->
-```text
+```mermaid
 flowchart TD
-    START([START]) --> DA["draft_agent<br/>(LLM produces ProjectDraft)"]
-    DA --> RHR["request_human_review<br/>(emits RequestInput interrupt)"]
-    RHR --> HHR["handle_human_review<br/>(routes on user reply)"]
+    START([START]) --> DA["draft_agent — LLM produces ProjectDraft"]
+    DA --> RHR["request_human_review — emits RequestInput interrupt"]
+    RHR --> HHR["handle_human_review — routes on user reply"]
     HHR -->|"approve"| FA["finalize_approval"]
     HHR -->|"reject"| FR["finalize_rejection"]
-    HHR -->|"revise"| BRP["build_revision_prompt<br/>(adds feedback + loops back)"]
+    HHR -->|"revise"| BRP["build_revision_prompt — adds feedback and loops back"]
     BRP --> DA
     FA --> END1([END])
     FR --> END2([END])
 ```
+
+*ADK workflow graph: the agent drafts a proposal, pauses for human review, and routes to approval, rejection, or revision with a feedback loop.*
 
 ### Workflow Nodes
 

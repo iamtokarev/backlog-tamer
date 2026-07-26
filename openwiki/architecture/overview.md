@@ -47,31 +47,30 @@ The integrations are detailed in [Telegram & Notion Integrations](../integration
 
 ## How Layers Connect
 
-<!-- openwiki: mermaid parse failed and this diagram was converted to a text fence so it does not break rendering. Fix the diagram source and restore the mermaid fence. Parser error: Heuristic: an unescaped angle bracket inside a label breaks rendering; rephrase the label. -->
-```text
+```mermaid
 flowchart TD
     subgraph "Telegram Entry Points"
-        A1["bot.py<br/>(polling)"]
-        A2["webhook_dev.py<br/>(local webhook)"]
-        A3["lambda_handlers.py<br/>(deployed)"]
+        A1["bot.py polling"]
+        A2["webhook_dev.py local webhook"]
+        A3["lambda_handlers.py deployed"]
     end
 
     subgraph "Handlers"
-        H["handlers.py<br/>handle_message / handle_callback"]
+        H["handlers.py — handle_message / handle_callback"]
     end
 
     subgraph "Application"
-        IS["IntakeService<br/>start_intake / resume_intake / finalize_approval"]
-        CS["ConfirmationStore<br/>(SQLAlchemy)"]
+        IS["IntakeService — start_intake / resume_intake / finalize_approval"]
+        CS["ConfirmationStore SQLAlchemy"]
     end
 
     subgraph "Agent (Google ADK)"
-        WF["Workflow<br/>draft → review → approve/reject/revise"]
-        DS["DatabaseSessionService<br/>(ADK sessions)"]
+        WF["Workflow — draft, review, approve/reject/revise"]
+        DS["DatabaseSessionService ADK sessions"]
     end
 
     subgraph "Notion"
-        NW["NotionWriter<br/>create_project_with_tasks"]
+        NW["NotionWriter create_project_with_tasks"]
     end
 
     A1 --> H
@@ -83,6 +82,8 @@ flowchart TD
     IS -->|"persists confirmation"| CS
     IS -->|"on approval"| NW
 ```
+
+*Three-layer architecture: Telegram entry points dispatch through shared handlers to IntakeService, which runs the ADK workflow and writes approved drafts to Notion.*
 
 ## Key Design Decisions
 

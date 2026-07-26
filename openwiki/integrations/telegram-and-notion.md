@@ -23,6 +23,14 @@ All three entry points build the same `python-telegram-bot` `Application` via `b
 | Local webhook | `webhook_dev.py` | Testing webhook locally (ngrok) | HTTP server → queue → `TelegramUpdateProcessor` |
 | Lambda | `lambda_handlers.py` | Production | AWS Lambda Function URL → SQS → `TelegramUpdateProcessor` |
 
+### Lambda Healthcheck
+
+`worker_handler` dispatches to a `_healthcheck()` function when the event contains `{"healthcheck": true}`. This is invoked by the [deploy workflow's smoke test](../operations/deployment.md) to verify the deployed image can do real work before traffic reaches it:
+
+1. Eagerly imports the agent (`agent`, `workflow`), Notion (`writer`), and fetch_url modules — these are otherwise only loaded on the first real message, so a broken image would surface as a failed user message instead of a failed deploy.
+2. Calls `fetch_url.missing_optional_dependencies()` to check that `beautifulsoup4` and `pypdf` are installed. Both loaders swallow `ImportError` and fall back silently, so a missing dependency degrades output quality without ever raising. The healthcheck surfaces this.
+3. Reads the installed package version via `importlib.metadata.version("backlog-tamer")` and returns `{"ok": true, "version": "..."}`. The deploy workflow asserts this matches the release tag.
+
 ### Handler Logic
 
 `handlers.py` defines two handlers registered in `build_application`:
@@ -113,3 +121,4 @@ The Notion database must have properties named: `Project name`, `Status`, `Prior
 | `src/backlog_tamer/integrations/telegram/rendering.py` | Markdown rendering, inline keyboards |
 | `src/backlog_tamer/integrations/telegram/state.py` | `TelegramStateStore` (revision tracking, update dedup) |
 | `src/backlog_tamer/integrations/notion/writer.py` | `NotionWriter` |
+| `src/backlog_tamer/agents/intake_triage/tools/fetch_url.py` | `missing_optional_dependencies()` used by Lambda healthcheck |
