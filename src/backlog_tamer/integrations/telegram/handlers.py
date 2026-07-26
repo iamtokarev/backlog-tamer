@@ -12,10 +12,15 @@ from backlog_tamer.application.models import ConfirmationStatus, IntakeResult
 from .parsing import build_incoming_context
 from .rendering import (
     CALLBACK_APPROVE,
+    CALLBACK_BACK,
+    CALLBACK_EDIT,
+    CALLBACK_PICK,
     CALLBACK_REJECT,
     CALLBACK_RETRY,
     CALLBACK_REVISE,
+    DRAFT_FIELD_NAMES,
     REVISION_PROMPT,
+    build_picker_keyboard,
     build_retry_keyboard,
     build_review_keyboard,
     render_draft_message,
@@ -90,6 +95,10 @@ async def handle_callback(
 
     intake_service = _get_intake_service(context)
 
+    if action in {CALLBACK_EDIT, CALLBACK_PICK, CALLBACK_BACK}:
+        await _handle_quick_edit(query, intake_service, action, confirmation_id)
+        return
+
     if action == CALLBACK_REVISE:
         identity = state_identity_from_update(update)
         if identity is None:
@@ -130,6 +139,62 @@ async def handle_callback(
         parse_mode=ParseMode.HTML,
         reply_markup=_terminal_keyboard(result),
     )
+
+
+async def _handle_quick_edit(
+    query,
+    intake_service: IntakeService,
+    action: str,
+    payload: str,
+) -> None:
+    """Open a field picker, apply a pick, or go back — all without the agent."""
+    if action == CALLBACK_EDIT:
+        field_code, confirmation_id = payload.split(":", 1)
+        if field_code not in DRAFT_FIELD_NAMES:
+            logger.warning("Unknown quick-edit field: %r", field_code)
+            return
+        await query.edit_message_reply_markup(
+            reply_markup=build_picker_keyboard(field_code, confirmation_id),
+        )
+        return
+
+    if action == CALLBACK_BACK:
+        confirmation_id = payload
+        draft = _require_draft(intake_service, confirmation_id)
+        if draft is None:
+            await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
+            return
+        await query.edit_message_reply_markup(
+            reply_markup=build_review_keyboard(draft, confirmation_id),
+        )
+        return
+
+    field_code, value, confirmation_id = payload.split(":", 2)
+    if field_code not in DRAFT_FIELD_NAMES:
+        logger.warning("Unknown quick-edit field: %r", field_code)
+        return
+
+    try:
+        record = intake_service.store.apply_manual_edit(
+            confirmation_id=confirmation_id,
+            field=DRAFT_FIELD_NAMES[field_code],
+            value=value,
+        )
+    except ValueError:
+        logger.warning("Quick edit rejected for confirmation %s", confirmation_id)
+        await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
+        return
+
+    await query.edit_message_text(
+        render_draft_message(record.draft_proposal),
+        parse_mode=ParseMode.HTML,
+        reply_markup=build_review_keyboard(record.draft_proposal, confirmation_id),
+    )
+
+
+def _require_draft(intake_service: IntakeService, confirmation_id: str):
+    record = intake_service.store.get(confirmation_id)
+    return record.draft_proposal if record is not None else None
 
 
 async def _handle_new_intake(
@@ -222,7 +287,10 @@ async def _send_draft(update: Update, result: IntakeResult) -> None:
     await message.reply_text(
         render_draft_message(result.draft_proposal),
         parse_mode=ParseMode.HTML,
-        reply_markup=build_review_keyboard(result.confirmation_id),
+        reply_markup=build_review_keyboard(
+            result.draft_proposal,
+            result.confirmation_id,
+        ),
     )
 
 

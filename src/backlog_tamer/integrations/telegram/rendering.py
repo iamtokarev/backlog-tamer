@@ -12,6 +12,21 @@ CALLBACK_APPROVE = "approve"
 CALLBACK_REVISE = "revise"
 CALLBACK_REJECT = "reject"
 CALLBACK_RETRY = "retry"
+CALLBACK_EDIT = "edit"
+CALLBACK_PICK = "pick"
+CALLBACK_BACK = "back"
+
+# Single-letter codes keep callback_data inside Telegram's 64-byte limit
+# once a 36-character confirmation id is appended.
+FIELD_PRIORITY = "p"
+FIELD_INTENT = "i"
+FIELD_TYPE = "t"
+
+DRAFT_FIELD_NAMES = {
+    FIELD_PRIORITY: "priority",
+    FIELD_INTENT: "intent",
+    FIELD_TYPE: "resource_type",
+}
 
 REVISION_PROMPT = "✏️ Send your revision as a reply."
 
@@ -39,6 +54,18 @@ PRIORITY_ICONS = {
     "High": "🔺",
     "Medium": "▪️",
     "Low": "🔻",
+}
+
+FIELD_OPTIONS = {
+    FIELD_PRIORITY: ("High", "Medium", "Low"),
+    FIELD_INTENT: tuple(INTENT_ICONS),
+    FIELD_TYPE: tuple(RESOURCE_TYPE_ICONS),
+}
+
+FIELD_ICONS = {
+    FIELD_PRIORITY: PRIORITY_ICONS,
+    FIELD_INTENT: INTENT_ICONS,
+    FIELD_TYPE: RESOURCE_TYPE_ICONS,
 }
 
 
@@ -79,25 +106,72 @@ def _display_url(url: str) -> str:
     return host.removeprefix("www.")
 
 
-def build_review_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
+def build_review_keyboard(
+    draft: ProjectDraft,
+    confirmation_id: str,
+) -> InlineKeyboardMarkup:
+    """Approve/reject, plus one-tap pickers for the three enum fields."""
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "✅ Approve",
+                    "✅ Approve & save",
                     callback_data=f"{CALLBACK_APPROVE}:{confirmation_id}",
-                ),
-                InlineKeyboardButton(
-                    "📝 Revise",
-                    callback_data=f"{CALLBACK_REVISE}:{confirmation_id}",
                 ),
                 InlineKeyboardButton(
                     "❌ Reject",
                     callback_data=f"{CALLBACK_REJECT}:{confirmation_id}",
                 ),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    f"{PRIORITY_ICONS.get(draft.priority, '▪️')} {draft.priority} ▸",
+                    callback_data=f"{CALLBACK_EDIT}:{FIELD_PRIORITY}:{confirmation_id}",
+                ),
+                InlineKeyboardButton(
+                    f"{INTENT_ICONS.get(draft.intent, '❔')} {draft.intent} ▸",
+                    callback_data=f"{CALLBACK_EDIT}:{FIELD_INTENT}:{confirmation_id}",
+                ),
+                InlineKeyboardButton(
+                    f"{RESOURCE_TYPE_ICONS.get(draft.resource_type, '❔')} "
+                    f"{draft.resource_type} ▸",
+                    callback_data=f"{CALLBACK_EDIT}:{FIELD_TYPE}:{confirmation_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📝 Revise with a note",
+                    callback_data=f"{CALLBACK_REVISE}:{confirmation_id}",
+                ),
+            ],
         ]
     )
+
+
+def build_picker_keyboard(
+    field_code: str,
+    confirmation_id: str,
+) -> InlineKeyboardMarkup:
+    """Replace the review keyboard with the options for one field."""
+    options = FIELD_OPTIONS[field_code]
+    icons = FIELD_ICONS[field_code]
+    buttons = [
+        InlineKeyboardButton(
+            f"{icons.get(option, '❔')} {option}",
+            callback_data=f"{CALLBACK_PICK}:{field_code}:{option}:{confirmation_id}",
+        )
+        for option in options
+    ]
+    rows = [buttons[index : index + 3] for index in range(0, len(buttons), 3)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "↩︎ Back",
+                callback_data=f"{CALLBACK_BACK}:{confirmation_id}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
 
 
 def render_terminal_message(

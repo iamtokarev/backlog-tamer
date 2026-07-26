@@ -56,7 +56,7 @@ def build_application(
     application.add_handler(
         CallbackQueryHandler(
             handle_callback,
-            pattern=r"^(approve|revise|reject|retry):",
+            pattern=r"^(approve|revise|reject|retry|edit|pick|back):",
         )
     )
     return application

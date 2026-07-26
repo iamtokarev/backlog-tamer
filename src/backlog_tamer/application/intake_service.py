@@ -28,6 +28,23 @@ def _to_session_service_db_url(database_url: str) -> str:
     return to_adk_session_database_url(database_url)
 
 
+def _with_manual_edits(review_reply: str, manual_edits: dict[str, str]) -> str:
+    """Tell the agent which fields the user already fixed with the buttons.
+
+    Quick edits patch the stored draft only; the workflow session still holds
+    the agent's own last draft, so without this the next revision would
+    silently undo them.
+    """
+    if not manual_edits or review_reply in {"approve", "reject"}:
+        return review_reply
+
+    applied = ", ".join(f"{field}={value}" for field, value in manual_edits.items())
+    return (
+        f"I already corrected these fields myself, keep them exactly as they are: "
+        f"{applied}.\n\n{review_reply}"
+    )
+
+
 class IntakeService:
     def __init__(
         self,
@@ -134,7 +151,7 @@ class IntakeService:
             invocation_id=confirmation.invocation_id,
             message=self._build_review_response(
                 confirmation.request_input_call_id,
-                review_reply,
+                _with_manual_edits(review_reply, confirmation.manual_edits),
             ),
         )
         session_state = await self._get_session_state(

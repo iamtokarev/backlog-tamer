@@ -28,6 +28,9 @@ class ConfirmationRecord(BaseModel):
     incoming_context: IncomingContext
     draft_proposal: ProjectDraft
     review_message: str
+    # Fields the user changed with the inline buttons since the agent last
+    # drafted. Replayed into the next revision so the agent does not undo them.
+    manual_edits: dict[str, str] = {}
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None = None
