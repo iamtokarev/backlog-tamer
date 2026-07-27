@@ -9,7 +9,7 @@ from backlog_tamer.integrations.telegram.config import TelegramConfig
 
 class AgentConfig(BaseSettings):
     openai_api_key: SecretStr
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-luna"
 
 
 class Settings(BaseSettings):
