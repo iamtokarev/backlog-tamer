@@ -1,5 +1,6 @@
 import os
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,6 +11,7 @@ from backlog_tamer.integrations.telegram.config import TelegramConfig
 class AgentConfig(BaseSettings):
     openai_api_key: SecretStr
     model: str = "gpt-5.6-luna"
+    reasoning_effort: Literal["none", "low", "medium", "high"] = "medium"
 
 
 class Settings(BaseSettings):
