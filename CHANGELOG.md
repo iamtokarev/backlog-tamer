@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.3.0...v0.4.0) (2026-07-27)
+
+
+### Features
+
+* update LLM ([3e24ef4](https://github.com/iamtokarev/backlog-tamer/commit/3e24ef46631ccc5ef2be6930fb48389197c8cc2d))
+
+
+### Bug Fixes
+
+* keep asyncpg working through the Supabase transaction pooler ([5e0cecd](https://github.com/iamtokarev/backlog-tamer/commit/5e0cecd3f5730d9db04eba0f7dec5ce044419765))
+
+
+### Documentation
+
+* update docs with latest changes ([ae60a54](https://github.com/iamtokarev/backlog-tamer/commit/ae60a5447bed8b31a5ce76a16cf3d30a05eb134a))
+
 ## [0.3.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.2.0...v0.3.0) (2026-07-26)
 
 
