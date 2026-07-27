@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1](https://github.com/iamtokarev/backlog-tamer/compare/v0.4.0...v0.4.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* send an explicit reasoning_effort so the agent can use its tools ([ae9a717](https://github.com/iamtokarev/backlog-tamer/commit/ae9a71779c59b73d5900ef8d2dabe2c4bd0500ba))
+
+
+### Documentation
+
+* update docs ([a3f49bd](https://github.com/iamtokarev/backlog-tamer/commit/a3f49bd8b79525987afdf290e56cc6fa363c61d0))
+
 ## [0.4.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.3.0...v0.4.0) (2026-07-27)
 
 
