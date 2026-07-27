@@ -48,6 +48,8 @@ Copy `.env.example` to `.env` and fill in the required values. Settings use `pyd
 
 Required env vars: `AGENT__OPENAI_API_KEY`, `TELEGRAM__BOT_TOKEN`, `TELEGRAM__ALLOWED_USER_ID`, `NOTION_TOKEN`, `NOTION_PROJECTS_DATABASE_ID`, `NOTION_TASKS_DATABASE_ID`, `DATABASE_URL`.
 
+Optional: `AGENT__MODEL` (default `gpt-5.6-luna`), `AGENT__REASONING_EFFORT` (default `medium`; must be `none`, `low`, `medium`, or `high` — `"minimal"` breaks the `fetch_url` tool on OpenAI's endpoint).
+
 ## Documentation Sections
 
 - [Architecture Overview](architecture/overview.md) — three-layer design, how the agent, application, and integrations connect

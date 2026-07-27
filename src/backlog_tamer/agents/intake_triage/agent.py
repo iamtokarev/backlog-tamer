@@ -16,6 +16,8 @@ def _get_model() -> LiteLlm:
     model = LiteLlm(
         model=f"openai/{settings.agent.model}",
         api_key=settings.agent.openai_api_key.get_secret_value(),
+        # "minimal" is the server-side default and OpenAI rejects it with tools.
+        reasoning_effort=settings.agent.reasoning_effort,
     )
     return model
 

@@ -19,7 +19,7 @@ Backlog Tamer is structured in three layers under `src/backlog_tamer/`. Each lay
 
 The AI triage layer. A Google ADK `Agent` wraps an OpenAI model via LiteLLM and produces a structured `ProjectDraft` as output. The agent is embedded in a `Workflow` graph that implements the human-in-the-loop approval cycle using ADK interrupts.
 
-- **`agent.py`** — defines `draft_agent` (the LLM agent) and `root_agent` (the workflow wrapping the agent). The agent uses `output_schema=ProjectDraft` and `output_key="draft_proposal"` to write structured drafts into session state.
+- **`agent.py`** — defines `draft_agent` (the LLM agent) and `root_agent` (the workflow wrapping the agent). The agent uses `output_schema=ProjectDraft` and `output_key="draft_proposal"` to write structured drafts into session state. Passes an explicit `reasoning_effort` to LiteLLM (see Key Design Decisions below).
 - **`workflow.py`** — builds the ADK `Workflow` graph: `draft → request_human_review → handle_human_review → {approved, rejected, revise}`. The `request_human_review` node emits a `RequestInput` interrupt that pauses execution until the user responds.
 - **`prompts.py`** — system instructions, triage prompt templates, review message templates, and revision prompt builder.
 - **`schemas.py`** — Pydantic models: `IncomingContext`, `ProjectDraft` (with `topics` and default-empty `tasks`), `FetchedUrl`, `DraftGrounding` (fetch results summary with `is_degraded` property), `SourceLink`, `ReviewDecision`.
@@ -92,6 +92,7 @@ flowchart TD
 - **Idempotent Notion commits.** `mark_committing_once` atomically transitions a confirmation from `PENDING_REVIEW` to `COMMITTING`, preventing duplicate writes if `finalize_approval` is called multiple times.
 - **Three Telegram entry points, shared handlers.** All three entry points (`bot.py`, `webhook_dev.py`, `lambda_handlers.py`) build the same `Application` via `build_application` and use the same `handle_message` / `handle_callback` handlers.
 - **SQS queue in production.** The Lambda webhook handler validates and enqueues; the Lambda worker handler dequeues and processes. This decouples Telegram's webhook timeout from the potentially slow agent workflow.
+- **Explicit `reasoning_effort` for function-tool compatibility.** LiteLLM sends no `reasoning_effort` by default, and `gpt-5.6-luna` falls back to the server-side `"minimal"` level, which is the one level that cannot be combined with function tools on OpenAI's `/v1/chat/completions` endpoint. The agent explicitly sends `reasoning_effort` from `AgentConfig` (default `"medium"`, settable via `AGENT__REASONING_EFFORT` with options `none`, `low`, `medium`, `high`) so the `fetch_url` tool works reliably.
 
 ## Source References
 
