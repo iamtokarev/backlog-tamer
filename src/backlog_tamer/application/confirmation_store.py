@@ -13,7 +13,7 @@ from backlog_tamer.agents.intake_triage.schemas import (
     ProjectDraft,
 )
 
-from .database_urls import to_sync_database_url
+from .database_urls import to_sync_database_url, uses_external_pooler
 from .models import ConfirmationRecord, ConfirmationStatus
 
 
@@ -63,7 +63,7 @@ class ConfirmationStore:
     def __init__(self, database_url: str):
         self.engine = create_engine(
             to_sync_database_url(database_url),
-            poolclass=NullPool if _uses_external_pooler(database_url) else None,
+            poolclass=NullPool if uses_external_pooler(database_url) else None,
         )
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)
@@ -348,7 +348,3 @@ def _load_manual_edits(raw: str | None) -> dict[str, str]:
     if not isinstance(parsed, dict):
         return {}
     return {str(key): str(value) for key, value in parsed.items()}
-
-
-def _uses_external_pooler(database_url: str) -> bool:
-    return "pooler.supabase.com" in database_url

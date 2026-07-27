@@ -20,7 +20,7 @@ from backlog_tamer.config import Settings, get_settings
 from backlog_tamer.integrations.notion import NotionWriter
 
 from .confirmation_store import ConfirmationStore, utc_now
-from .database_urls import to_adk_session_database_url
+from .database_urls import async_engine_options, to_adk_session_database_url
 from .models import ConfirmationRecord, ConfirmationStatus, IntakeResult
 
 APP_NAME = "backlog_tamer"
@@ -86,7 +86,10 @@ class IntakeService:
         self.app_name = app_name
         self.store = store or ConfirmationStore(self.database_url)
         self.notion_writer = notion_writer
-        self.session_service = DatabaseSessionService(db_url=self.session_database_url)
+        self.session_service = DatabaseSessionService(
+            db_url=self.session_database_url,
+            **async_engine_options(self.database_url),
+        )
         self.runner = Runner(
             agent=self._get_root_agent(),
             app_name=self.app_name,
