@@ -106,7 +106,7 @@ The secret JSON should contain all keys from `.env.example` (e.g. `AGENT__OPENAI
 
 `.github/workflows/release.yml` owns the release lifecycle. On every push to `main`, [release-please](https://github.com/googleapis/release-please) maintains a standing release PR that bumps `pyproject.toml` and writes `CHANGELOG.md` from conventional commits. Merging that PR cuts a tag and GitHub release, which triggers CI as a reusable workflow gate and then deploys:
 
-1. **release-please** — creates/updates the release PR. Configured via `release-please-config.json` (release type `python`, `include-v-in-tags`, bootstrap SHA `8712113`). Version tracked in `.release-please-manifest.json` (currently `0.1.1`).
+1. **release-please** — creates/updates the release PR. Configured via `release-please-config.json` (release type `python`, `include-v-in-tags`, `include-component-in-tag: false` so tags are `v0.3.0` not `backlog-tamer-v0.3.0`, bootstrap SHA `8712113`). Version tracked in `.release-please-manifest.json` (currently `0.3.0`).
 2. **relock** — re-runs `uv lock` on the release PR branch to keep `uv.lock` in sync with the version bump (release-please force-pushes the branch, so this commit is ephemeral and re-applied each run).
 3. **CI** — re-runs the full CI suite against the release commit as a synchronous gate.
 4. **Deploy** — invoked as a reusable `workflow_call` with the release tag as `version` input.
@@ -153,7 +153,7 @@ After deployment, register the Telegram webhook to the Lambda Function URL (outp
 ## Key Operations Notes
 
 - **Update deduplication** — The Lambda worker uses `TelegramStateStore.record_update_once` to skip duplicate `update_id` values from SQS retries. This is separate from the ADK session state.
-- **NullPool for external poolers** — When using Supabase/external connection poolers, `ConfirmationStore` and `TelegramStateStore` use `NullPool` to avoid connection lifecycle conflicts. Detection is based on the database URL pattern.
+- **NullPool and asyncpg statement cache for external poolers** — When using Supabase's transaction-mode pooler (port 6543, `pooler.supabance.com` in URL), `ConfirmationStore` and `TelegramStateStore` use `NullPool`, and the ADK `DatabaseSessionService` async engine gets `connect_args={"statement_cache_size": 0}`. This fixes asyncpg's "prepared statement does not exist" error behind PgBouncer, where each transaction lands on a different backend. Detection is via `uses_external_pooler()` in `database_urls.py`.
 - **LangSmith tracing** — Enabled lazily in `IntakeService` when `LANGSMITH_API_KEY` is set. `Settings.export_to_env()` populates the LangSmith env vars from the settings model.
 - **google-adk version** — Pinned to ≥2.4.0 because of a fix (commit `41409b4`) where `run_async` `state_delta` did not reach workflow nodes in earlier versions.
 
