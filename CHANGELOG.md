@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.2](https://github.com/iamtokarev/backlog-tamer/compare/v0.4.1...v0.4.2) (2026-08-10)
+
+
+### Bug Fixes
+
+* security fixes ([bd3e0e5](https://github.com/iamtokarev/backlog-tamer/commit/bd3e0e541415a48035fe0466b08d2e95c8e3d5d9))
+
+
+### Documentation
+
+* update openwiki docs ([9df16a8](https://github.com/iamtokarev/backlog-tamer/commit/9df16a8c02856ed271e6aa2dddaf4ba8ce5ff4a5))
+
 ## [0.4.1](https://github.com/iamtokarev/backlog-tamer/compare/v0.4.0...v0.4.1) (2026-07-27)
 
 
