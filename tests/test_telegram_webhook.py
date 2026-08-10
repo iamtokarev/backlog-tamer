@@ -52,6 +52,25 @@ def test_validate_webhook_rejects_wrong_secret():
     assert result.reason == "invalid_secret"
 
 
+def test_validate_webhook_rejects_missing_secret_configuration():
+    payload = {
+        "update_id": 123,
+        "message": {
+            "from": {"id": 42},
+        },
+    }
+
+    result = validate_webhook_update(
+        payload=payload,
+        headers={},
+        expected_secret=None,
+        allowed_user_id=42,
+    )
+
+    assert result.accepted is False
+    assert result.reason == "missing_secret"
+
+
 def test_validate_webhook_ignores_unauthorized_user():
     payload = {
         "update_id": 123,
@@ -64,8 +83,8 @@ def test_validate_webhook_ignores_unauthorized_user():
 
     result = validate_webhook_update(
         payload=payload,
-        headers={},
-        expected_secret=None,
+        headers={TELEGRAM_SECRET_HEADER: "secret"},
+        expected_secret="secret",
         allowed_user_id=42,
     )
 

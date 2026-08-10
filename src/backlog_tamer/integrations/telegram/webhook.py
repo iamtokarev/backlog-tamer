@@ -78,13 +78,12 @@ def validate_webhook_update(
     expected_secret: str | None,
     allowed_user_id: int,
 ) -> WebhookValidationResult:
-    if expected_secret:
-        actual_secret = _header_value(headers, TELEGRAM_SECRET_HEADER)
-        if actual_secret is None or not hmac.compare_digest(
-            actual_secret,
-            expected_secret,
-        ):
-            return WebhookValidationResult(False, "invalid_secret")
+    authentication = validate_webhook_secret(
+        headers=headers,
+        expected_secret=expected_secret,
+    )
+    if not authentication.accepted:
+        return authentication
 
     update_id = payload.get("update_id")
     if not isinstance(update_id, int):
@@ -96,6 +95,21 @@ def validate_webhook_update(
 
     if not _is_supported_update(payload):
         return WebhookValidationResult(False, "unsupported_update")
+
+    return WebhookValidationResult(True)
+
+
+def validate_webhook_secret(
+    *,
+    headers: dict[str, str],
+    expected_secret: str | None,
+) -> WebhookValidationResult:
+    if expected_secret is None or not expected_secret.strip():
+        return WebhookValidationResult(False, "missing_secret")
+
+    actual_secret = _header_value(headers, TELEGRAM_SECRET_HEADER)
+    if actual_secret is None or not hmac.compare_digest(actual_secret, expected_secret):
+        return WebhookValidationResult(False, "invalid_secret")
 
     return WebhookValidationResult(True)
 

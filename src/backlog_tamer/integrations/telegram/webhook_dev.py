@@ -18,10 +18,20 @@ from .state import TelegramStateStore
 from .webhook import (
     TelegramUpdateProcessor,
     decode_json_body,
+    validate_webhook_secret,
     validate_webhook_update,
 )
 
 logger = logging.getLogger(__name__)
+MAX_WEBHOOK_BODY_BYTES = 1_000_000
+WEBHOOK_READ_TIMEOUT_SECONDS = 10.0
+
+
+class _TimeoutThreadingHTTPServer(ThreadingHTTPServer):
+    def get_request(self):
+        request, client_address = super().get_request()
+        request.settimeout(WEBHOOK_READ_TIMEOUT_SECONDS)
+        return request, client_address
 
 
 def main() -> None:
@@ -150,6 +160,10 @@ def _build_server(
         if settings.telegram.webhook_secret is not None
         else None
     )
+    if webhook_secret is None or not webhook_secret.strip():
+        raise RuntimeError(
+            "TELEGRAM__WEBHOOK_SECRET must be configured for webhook mode."
+        )
 
     class WebhookHandler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
@@ -157,10 +171,26 @@ def _build_server(
                 self._respond(HTTPStatus.NOT_FOUND, b"not found")
                 return
 
+            authentication = validate_webhook_secret(
+                headers=dict(self.headers.items()),
+                expected_secret=webhook_secret,
+            )
+            if not authentication.accepted:
+                self._respond(HTTPStatus.FORBIDDEN, b"forbidden")
+                return
+
             try:
-                content_length = int(self.headers.get("content-length", "0"))
+                content_length = self._validated_content_length()
+                self.connection.settimeout(WEBHOOK_READ_TIMEOUT_SECONDS)
                 body = self.rfile.read(content_length)
                 payload = decode_json_body(body)
+            except TimeoutError:
+                logger.info("Timed out reading Telegram webhook request")
+                self._respond(HTTPStatus.REQUEST_TIMEOUT, b"request timeout")
+                return
+            except _RequestBodyError as exc:
+                self._respond(exc.status, exc.body)
+                return
             except Exception:
                 logger.exception("Invalid Telegram webhook request")
                 self._respond(HTTPStatus.BAD_REQUEST, b"invalid json")
@@ -191,6 +221,32 @@ def _build_server(
             updates.put(payload)
             self._respond(HTTPStatus.OK, b"ok")
 
+        def _validated_content_length(self) -> int:
+            raw_length = self.headers.get("content-length")
+            if raw_length is None:
+                raise _RequestBodyError(
+                    HTTPStatus.LENGTH_REQUIRED,
+                    b"content length required",
+                )
+            try:
+                content_length = int(raw_length)
+            except ValueError as exc:
+                raise _RequestBodyError(
+                    HTTPStatus.BAD_REQUEST,
+                    b"invalid content length",
+                ) from exc
+            if content_length < 0:
+                raise _RequestBodyError(
+                    HTTPStatus.BAD_REQUEST,
+                    b"invalid content length",
+                )
+            if content_length > MAX_WEBHOOK_BODY_BYTES:
+                raise _RequestBodyError(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    b"request too large",
+                )
+            return content_length
+
         def log_message(self, format: str, *args) -> None:
             logger.debug(format, *args)
 
@@ -201,7 +257,14 @@ def _build_server(
             self.end_headers()
             self.wfile.write(body)
 
-    return ThreadingHTTPServer((host, port), WebhookHandler)
+    return _TimeoutThreadingHTTPServer((host, port), WebhookHandler)
+
+
+class _RequestBodyError(ValueError):
+    def __init__(self, status: HTTPStatus, body: bytes):
+        super().__init__(body.decode())
+        self.status = status
+        self.body = body
 
 
 if __name__ == "__main__":

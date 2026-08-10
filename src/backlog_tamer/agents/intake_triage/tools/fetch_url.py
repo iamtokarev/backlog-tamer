@@ -3,12 +3,13 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+from dataclasses import dataclass
+from email.message import Message
 from functools import lru_cache
+from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from io import BytesIO
 from typing import Final
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlparse, urlunparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from google.adk.tools import ToolContext
 
@@ -21,6 +22,7 @@ MAX_PREVIEW_CHARS: Final[int] = 1_200
 MAX_KEY_POINTS: Final[int] = 5
 MAX_PDF_PAGES: Final[int] = 5
 MAX_CACHED_URLS: Final[int] = 128
+REDIRECT_STATUS_CODES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 USER_AGENT: Final[str] = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -54,17 +56,48 @@ class RedirectLimitExceededError(ValueError):
     pass
 
 
-class SafeRedirectHandler(HTTPRedirectHandler):
-    def __init__(self, max_redirects: int):
-        self.max_redirects = max_redirects
-        self.redirect_count = 0
+@dataclass(frozen=True)
+class PublicHttpResponse:
+    url: str
+    status: int
+    headers: Message
+    body: bytes
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        self.redirect_count += 1
-        if self.redirect_count > self.max_redirects:
-            raise RedirectLimitExceededError("Too many redirects")
-        safe_url = _normalize_public_url(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, safe_url)
+
+class _PinnedAddressMixin:
+    _pinned_ip: str
+
+    def _create_pinned_connection(
+        self,
+        address,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        source_address=None,
+    ):
+        sock = socket.create_connection(
+            (self._pinned_ip, address[1]),
+            timeout,
+            source_address,
+        )
+        try:
+            _assert_expected_public_peer(sock, self._pinned_ip)
+        except Exception:
+            sock.close()
+            raise
+        return sock
+
+
+class _PinnedHTTPConnection(_PinnedAddressMixin, HTTPConnection):
+    def __init__(self, hostname: str, pinned_ip: str, port: int | None):
+        self._pinned_ip = pinned_ip
+        super().__init__(hostname, port=port, timeout=REQUEST_TIMEOUT_SECONDS)
+        self._create_connection = self._create_pinned_connection
+
+
+class _PinnedHTTPSConnection(_PinnedAddressMixin, HTTPSConnection):
+    def __init__(self, hostname: str, pinned_ip: str, port: int | None):
+        self._pinned_ip = pinned_ip
+        super().__init__(hostname, port=port, timeout=REQUEST_TIMEOUT_SECONDS)
+        self._create_connection = self._create_pinned_connection
 
 
 def fetch_url(url: str, tool_context: ToolContext | None = None) -> dict:
@@ -83,7 +116,7 @@ def fetch_url(url: str, tool_context: ToolContext | None = None) -> dict:
     """
 
     try:
-        normalized_url = _normalize_public_url(url)
+        normalized_url = _normalize_url_syntax(url)
     except ValueError as exc:
         result = FetchedUrl(
             status="error",
@@ -129,41 +162,13 @@ def _fetch_url_cached(normalized_url: str) -> FetchedUrl:
         if x_result is not None:
             return x_result
 
-    request = Request(
-        normalized_url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-    opener = build_opener(SafeRedirectHandler(MAX_REDIRECTS))
-
     try:
-        with opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            final_url = _normalize_public_url(response.geturl())
-            status_code = getattr(response, "status", None)
-            content_type = response.headers.get_content_type()
-            charset = response.headers.get_content_charset() or "utf-8"
-            body = response.read(MAX_RESPONSE_BYTES + 1)
-    except HTTPError as exc:
-        return FetchedUrl(
-            status="error",
-            requested_url=normalized_url,
-            final_url=_safe_error_url(exc),
-            status_code=exc.code,
-            error=f"HTTP {exc.code} while fetching URL.",
-        )
+        response = _request_public_url(normalized_url)
     except RedirectLimitExceededError as exc:
         return FetchedUrl(
             status="error",
             requested_url=normalized_url,
             error=str(exc),
-        )
-    except URLError as exc:
-        return FetchedUrl(
-            status="error",
-            requested_url=normalized_url,
-            error=_stringify_exception(exc),
         )
     except Exception as exc:  # pragma: no cover - network/runtime variability
         return FetchedUrl(
@@ -172,6 +177,20 @@ def _fetch_url_cached(normalized_url: str) -> FetchedUrl:
             error=_stringify_exception(exc),
         )
 
+    final_url = response.url
+    status_code = response.status
+    if status_code >= 400:
+        return FetchedUrl(
+            status="error",
+            requested_url=normalized_url,
+            final_url=final_url,
+            status_code=status_code,
+            error=f"HTTP {status_code} while fetching URL.",
+        )
+
+    content_type = response.headers.get_content_type()
+    charset = response.headers.get_content_charset() or "utf-8"
+    body = response.body
     notes: list[str] = []
     if len(body) > MAX_RESPONSE_BYTES:
         body = body[:MAX_RESPONSE_BYTES]
@@ -235,23 +254,17 @@ def _fetch_x_status_oembed(normalized_url: str) -> FetchedUrl | None:
             "dnt": "true",
         }
     )
-    request = Request(
-        oembed_url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-
     try:
-        with build_opener().open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            if response.headers.get_content_type() != "application/json":
-                return None
-            charset = response.headers.get_content_charset() or "utf-8"
-            payload = response.read(MAX_RESPONSE_BYTES).decode(
-                charset,
-                errors="replace",
-            )
+        response = _request_public_url(oembed_url)
+        if response.status >= 400:
+            return None
+        if response.headers.get_content_type() != "application/json":
+            return None
+        charset = response.headers.get_content_charset() or "utf-8"
+        payload = response.body[:MAX_RESPONSE_BYTES].decode(
+            charset,
+            errors="replace",
+        )
     except Exception:
         return None
 
@@ -505,20 +518,119 @@ def _build_text_result(
     )
 
 
+def _request_public_url(url: str) -> PublicHttpResponse:
+    current_url = url
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        normalized_url, addresses = _prepare_public_url(current_url)
+        response = _request_any_public_address(normalized_url, addresses)
+        if response.status not in REDIRECT_STATUS_CODES:
+            return response
+
+        location = response.headers.get("location")
+        if not location:
+            return response
+        if redirect_count >= MAX_REDIRECTS:
+            raise RedirectLimitExceededError("Too many redirects")
+        current_url = urljoin(normalized_url, location)
+
+    raise RedirectLimitExceededError("Too many redirects")  # pragma: no cover
+
+
+def _request_any_public_address(
+    url: str,
+    addresses: tuple[str, ...],
+) -> PublicHttpResponse:
+    last_error: OSError | HTTPException | None = None
+    for pinned_ip in addresses:
+        try:
+            return _request_public_address(url, pinned_ip)
+        except (OSError, HTTPException) as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    raise OSError("No validated public address was available.")
+
+
+def _request_public_address(url: str, pinned_ip: str) -> PublicHttpResponse:
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if hostname is None:  # _prepare_public_url already enforces this.
+        raise ValueError("URL must include a valid hostname.")
+
+    connection_class = (
+        _PinnedHTTPSConnection if parsed.scheme == "https" else _PinnedHTTPConnection
+    )
+    connection = connection_class(hostname, pinned_ip, parsed.port)
+    target = parsed.path or "/"
+    if parsed.params:
+        target = f"{target};{parsed.params}"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+
+    try:
+        connection.request(
+            "GET",
+            target,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        response = connection.getresponse()
+        body = (
+            b""
+            if response.status in REDIRECT_STATUS_CODES
+            else response.read(MAX_RESPONSE_BYTES + 1)
+        )
+        return PublicHttpResponse(
+            url=url,
+            status=response.status,
+            headers=response.headers,
+            body=body,
+        )
+    finally:
+        connection.close()
+
+
+def _assert_expected_public_peer(sock, pinned_ip: str) -> None:
+    expected_ip = ipaddress.ip_address(pinned_ip)
+    peer_ip = ipaddress.ip_address(sock.getpeername()[0])
+    if peer_ip != expected_ip or not peer_ip.is_global:
+        raise ValueError("Connection reached an unexpected or non-global IP address.")
+
+
+def _prepare_public_url(url: str) -> tuple[str, tuple[str, ...]]:
+    normalized_url = _normalize_url_syntax(url)
+    hostname = urlparse(normalized_url).hostname
+    if hostname is None:  # _normalize_url_syntax already enforces this.
+        raise ValueError("URL must include a valid hostname.")
+    return normalized_url, _resolve_public_addresses(hostname.lower())
+
+
 def _normalize_public_url(url: str) -> str:
-    parsed = urlparse(url.strip())
+    normalized_url, _addresses = _prepare_public_url(url)
+    return normalized_url
+
+
+def _normalize_url_syntax(url: str) -> str:
+    try:
+        parsed = urlparse(url.strip())
+        hostname = parsed.hostname
+        _parsed_port = parsed.port
+    except ValueError as exc:
+        raise ValueError("URL must include a valid hostname and port.") from exc
+
     if parsed.scheme.lower() not in {"http", "https"}:
         raise ValueError("URL must use http or https.")
-    if not parsed.hostname:
+    if not hostname:
         raise ValueError("URL must include a valid hostname.")
     if parsed.username or parsed.password:
         raise ValueError("URLs with embedded credentials are not allowed.")
 
-    hostname = parsed.hostname.lower()
+    hostname = hostname.lower()
     if hostname == "localhost" or hostname.endswith(PRIVATE_HOST_SUFFIXES):
         raise ValueError("Private or local hostnames are not allowed.")
-
-    _assert_public_host(hostname)
 
     path = parsed.path or "/"
     normalized = parsed._replace(
@@ -537,24 +649,34 @@ def _is_x_status_url(parsed_url) -> bool:
     return X_STATUS_PATH_RE.match(parsed_url.path) is not None
 
 
-def _assert_public_host(hostname: str) -> None:
+def _resolve_public_addresses(hostname: str) -> tuple[str, ...]:
     try:
         ip = ipaddress.ip_address(hostname)
     except ValueError:
         ip = None
 
-    if ip is not None and not ip.is_global:
-        raise ValueError("Private or non-global IP addresses are not allowed.")
+    if ip is not None:
+        if not ip.is_global:
+            raise ValueError("Private or non-global IP addresses are not allowed.")
+        return (str(ip),)
 
     try:
         resolved = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return
+    except socket.gaierror as exc:
+        raise ValueError(f"Hostname {hostname!r} could not be resolved.") from exc
 
+    addresses: list[str] = []
     for _, _, _, _, sockaddr in resolved:
         resolved_ip = ipaddress.ip_address(sockaddr[0])
         if not resolved_ip.is_global:
             raise ValueError("URL resolves to a private or non-global IP address.")
+        rendered_ip = str(resolved_ip)
+        if rendered_ip not in addresses:
+            addresses.append(rendered_ip)
+
+    if not addresses:
+        raise ValueError(f"Hostname {hostname!r} did not resolve to an IP address.")
+    return tuple(addresses)
 
 
 def _extract_meta_content(
@@ -766,15 +888,6 @@ def _clean_text(value: object) -> str | None:
         return None
     text = WHITESPACE_RE.sub(" ", str(value)).strip()
     return text or None
-
-
-def _safe_error_url(exc: HTTPError) -> str | None:
-    if not getattr(exc, "url", None):
-        return None
-    try:
-        return _normalize_public_url(exc.url)
-    except ValueError:
-        return None
 
 
 def _stringify_exception(exc: Exception) -> str:
