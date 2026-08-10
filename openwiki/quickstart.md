@@ -60,6 +60,4 @@ Optional: `AGENT__MODEL` (default `gpt-5.6-luna`), `AGENT__REASONING_EFFORT` (de
 
 ## Backlog
 
-- **URL fetch tool internals** (`src/backlog_tamer/agents/intake_triage/tools/fetch_url.py`) — SSRF protection, HTML/PDF parsing, X/Twitter oEmbed handling are not yet documented in detail. Deferred because the tool is well-tested and self-contained; a future run could document the security model and content extraction pipeline.
-- **Product roadmap milestones B–D** (`documentation/milestone-b-smart-triage.md` through `milestone-d-operating-system.md`) — not yet documented. Deferred because the codebase only implements Milestone A; the milestone docs are planning text without corresponding code.
-- **`test.ipynb`** — appears to be a scratch notebook. No documentation needed.
+- **URL fetch tool internals** (`src/backlog_tamer/agents/intake_triage/tools/fetch_url.py`) — SSRF protection (pinned-IP connections, DNS rebinding prevention, manual redirect handling), HTML/PDF parsing, and X/Twitter oEmbed handling are not yet documented in detail. Deferred because the tool is well-tested and self-contained; a future run could document the security model and content extraction pipeline.

@@ -10,6 +10,7 @@ from typing import Any
 
 from .webhook import (
     decode_json_body,
+    validate_webhook_secret,
     validate_webhook_update,
 )
 
@@ -24,6 +25,16 @@ def webhook_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     _load_runtime_secrets()
     config = _telegram_webhook_config()
 
+    authentication = validate_webhook_secret(
+        headers=event.get("headers") or {},
+        expected_secret=config["webhook_secret"],
+    )
+    if not authentication.accepted:
+        if authentication.reason == "missing_secret":
+            logger.error("Telegram webhook secret is not configured; failing closed")
+            return _response(503, "service unavailable")
+        return _response(403, "forbidden")
+
     try:
         payload = decode_json_body(_event_body(event))
     except Exception:
@@ -37,7 +48,7 @@ def webhook_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         allowed_user_id=config["allowed_user_id"],
     )
     if not validation.accepted:
-        if validation.reason == "invalid_secret":
+        if validation.reason in {"invalid_secret", "missing_secret"}:
             return _response(403, "forbidden")
         logger.info("Ignoring Telegram update: %s", validation.reason)
         return _response(200, "ignored")

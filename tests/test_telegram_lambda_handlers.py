@@ -130,6 +130,42 @@ def test_webhook_handler_rejects_invalid_secret(monkeypatch):
     assert result["body"] == "forbidden"
 
 
+@pytest.mark.parametrize("configured_secret", [None, "", "   "])
+def test_webhook_handler_fails_closed_when_secret_is_missing(
+    monkeypatch,
+    configured_secret,
+):
+    monkeypatch.delenv(SECRET_ARN_ENV, raising=False)
+    monkeypatch.setattr(
+        "backlog_tamer.integrations.telegram.lambda_handlers._SECRETS_LOADED",
+        False,
+    )
+    sqs = FakeSQSClient()
+    monkeypatch.setenv(QUEUE_URL_ENV, "https://sqs.example/queue")
+    monkeypatch.setenv("TELEGRAM__ALLOWED_USER_ID", "42")
+    if configured_secret is None:
+        monkeypatch.delenv("TELEGRAM__WEBHOOK_SECRET", raising=False)
+    else:
+        monkeypatch.setenv("TELEGRAM__WEBHOOK_SECRET", configured_secret)
+    monkeypatch.setattr(
+        "backlog_tamer.integrations.telegram.lambda_handlers._aws_client",
+        lambda service_name: sqs,
+    )
+
+    result = webhook_handler(
+        {
+            "headers": {},
+            "body": "this must not be parsed",
+            "isBase64Encoded": False,
+        },
+        SimpleNamespace(),
+    )
+
+    assert result["statusCode"] == 503
+    assert result["body"] == "service unavailable"
+    assert sqs.sent_messages == []
+
+
 def test_worker_handler_healthcheck_reports_version(healthcheck_env):
     result = worker_handler({"healthcheck": True}, SimpleNamespace())
 

@@ -124,7 +124,7 @@ The secret JSON should contain all keys from `.env.example` (e.g. `AGENT__OPENAI
 7. `terraform apply -auto-approve` with `image_tag=$VERSION`.
 8. **Post-deploy smoke tests:**
    - **Worker healthcheck** — invokes the worker Lambda with `{"healthcheck": true}`, which eagerly imports agent and Notion modules, checks for missing extraction dependencies (`beautifulsoup4`, `pypdf`), and asserts the deployed version matches the release tag. See [Telegram and Notion Integrations](../integrations/telegram-and-notion.md) for the healthcheck implementation.
-   - **Webhook auth rejection** — sends an unsigned request to the webhook Lambda and asserts a `403` response. A `200` would mean `TELEGRAM__WEBHOOK_SECRET` is unset and the public Function URL is unauthenticated.
+   - **Webhook auth rejection** — sends an unsigned request to the webhook Lambda and asserts a `403` response. A `503` would mean `TELEGRAM__WEBHOOK_SECRET` is not configured (the handler now fails closed); a `200` would mean the webhook is accepting requests without validation.
 
 Terraform outputs `webhook_function_name` and `worker_function_name` for the smoke tests.
 

@@ -55,14 +55,29 @@ All three entry points build the same `python-telegram-bot` `Application` via `b
 
 ### Webhook Validation
 
-`webhook.py` provides `validate_webhook_update`, which checks:
+`webhook.py` provides `validate_webhook_secret` (standalone) and `validate_webhook_update` (which delegates to it). The secret check is **fail-closed**: if `webhook_secret` is `None` or empty, `validate_webhook_secret` returns `accepted=False` with `reason="missing_secret"`. If the secret is configured but the `x-telegram-bot-api-secret-token` header is absent or does not match (via `hmac.compare_digest`), it returns `reason="invalid_secret"`.
 
-1. **Secret token** — `x-telegram-bot-api-secret-token` header compared via `hmac.compare_digest` (if configured).
+`validate_webhook_update` checks:
+
+1. **Secret token** — delegates to `validate_webhook_secret`; fail-closed if not configured.
 2. **Update ID** — must be an integer.
 3. **User authorization** — sender `id` must match `allowed_user_id`.
 4. **Supported update type** — must contain `message` or `callback_query` dict.
 
-Unsupported or unauthorized updates return 200 "ignored" (not an error). Invalid secret returns 403 "forbidden".
+Unsupported or unauthorized updates return 200 "ignored" (not an error). Invalid or missing secret returns 403 "forbidden".
+
+#### Lambda webhook handler
+
+`lambda_handlers.py` calls `validate_webhook_secret` **before** decoding the JSON body. If the secret is not configured (`missing_secret`), it returns **503** "service unavailable" — the function is intentionally unavailable without authentication. If the secret is configured but the header doesn't match (`invalid_secret`), it returns **403** "forbidden".
+
+#### Local webhook server hardening
+
+`webhook_dev.py` enforces additional protections:
+
+- **Required secret** — raises `RuntimeError` at startup if `TELEGRAM__WEBHOOK_SECRET` is not set, so the dev server cannot run unauthenticated.
+- **Body size limit** — rejects requests with `Content-Length` > 1 MB (413), missing `Content-Length` (411), or invalid/negative values (400).
+- **Read timeout** — `_TimeoutThreadingHTTPServer` sets a 10-second socket read timeout on each connection, returning 408 on `TimeoutError`.
+- **Early authentication** — validates the webhook secret before reading the request body.
 
 ### Telegram State
 
@@ -135,7 +150,7 @@ The Notion projects database must have properties named: `Project name`, `Status
 | `src/backlog_tamer/integrations/telegram/bot.py` | `build_application`, polling entry point |
 | `src/backlog_tamer/integrations/telegram/handlers.py` | `handle_message`, `handle_callback` |
 | `src/backlog_tamer/integrations/telegram/parsing.py` | `build_incoming_context` |
-| `src/backlog_tamer/integrations/telegram/webhook.py` | `TelegramUpdateProcessor`, `validate_webhook_update` |
+| `src/backlog_tamer/integrations/telegram/webhook.py` | `TelegramUpdateProcessor`, `validate_webhook_update`, `validate_webhook_secret` |
 | `src/backlog_tamer/integrations/telegram/webhook_dev.py` | Local webhook server |
 | `src/backlog_tamer/integrations/telegram/lambda_handlers.py` | Lambda `webhook_handler` and `worker_handler` |
 | `src/backlog_tamer/integrations/telegram/rendering.py` | HTML rendering, inline keyboards, picker keyboards, terminal keyboards |
