@@ -16,7 +16,7 @@ The product sits between curiosity and execution: Telegram is the low-friction i
 
 1. **Capture** — user sends a link, note, or idea to the Telegram bot.
 2. **Interpret** — the agent fetches URLs when useful, classifies the input, and drafts a `ProjectDraft` with grounding metadata.
-3. **Propose** — the bot replies with the structured draft and inline-keyboard buttons (Approve / Reject / Revise / quick-edit pickers for priority, intent, type).
+3. **Propose** — the bot replies with the structured draft and inline-keyboard buttons (Approve / Reject / Revise / quick-edit pickers for priority, intent, project type).
 4. **Confirm** — user taps a button, adjusts fields with quick-edit pickers, or sends revision feedback.
 5. **Commit** — on approval, the draft is written to Notion as a project page with task sub-pages. Duplicate URLs are detected and offered for merge. Failed saves can be retried.
 6. **Reuse** — the user can undo a commit (archives Notion pages) or add tasks to an existing duplicate project, then reviews and acts from a cleaner Notion backlog.

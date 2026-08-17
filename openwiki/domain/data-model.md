@@ -35,12 +35,14 @@ The agent's structured output. Written to session state under key `draft_proposa
 |-------|------|-------|
 | `project_name` | `str` | Min length 1 (never bare names) |
 | `summary` | `str` | 1–600 chars |
-| `resource_type` | `Literal` | `article`, `paper`, `video`, `course`, `documentation`, `repository`, `idea`, `unknown` |
+| `project_type` | `Literal` | `paper`, `repository`, `product`, `company`, `model`, `tool` — describes the thing the user wants to explore, not the page that introduced it |
 | `intent` | `Literal` | `learn`, `build`, `research`, `explore`, `reference`, `unclear` |
 | `priority` | `Literal` | `Low`, `Medium`, `High` |
 | `source_url` | `str \| None` | Original URL if available |
-| `topics` | `list[str]` | Up to 3 topic tags; carried into the Notion Tags property instead of restating type/intent |
+| `topics` | `list[str]` | Up to 3 topic tags; carried into the Notion Tags property instead of restating project type/intent |
 | `tasks` | `list[str]` | Defaults to empty list; up to 5 if user requests breakdown |
+
+A `@model_validator(mode="before")` named `migrate_legacy_resource_type` transparently migrates drafts persisted with the old `resource_type` field to the new `project_type` using `LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE`. This ensures pending confirmations saved before the rename remain reviewable.
 
 ### FetchedUrl
 
@@ -216,15 +218,15 @@ Created in the projects database with:
 - **Project name** (title): `draft.project_name`
 - **Status** (status): `"Backlog"` (fixed default)
 - **Priority** (select): `draft.priority`
-- **Type** (select): `draft.resource_type`
+- **Project type** (select): `draft.project_type` (property name `"Project type"`; falls back to legacy `"Type"` if that is the only column the database has)
 - **Intent** (select): `draft.intent`
-- **Tags** (multi_select): derived from `draft.topics`
+- **Tags** (multi_select): derived from `draft.topics`; drafts without topics fall back to `draft.project_type` and `draft.intent` (via `_draft_tags`)
 - **Captured** (date): today's date
 - **Summary** (rich_text): `draft.summary`
 - **Source** (url): `draft.source_url` if present
-- **Icon**: emoji mapped from `resource_type`
+- **Icon**: emoji mapped from `project_type`
 - **Children** (page body): bookmark block for the source URL, "Why I saved this" heading with the user's note, "Key points" from grounding (if available), "Next action" to-do blocks for tasks, and a provenance callout. No `template` is sent on project pages because Notion rejects a page that sends both a template and children.
-- Optional properties (Source, Type, Intent, Captured) are silently dropped if the database does not have them yet, via `_fit_to_schema`.
+- Optional properties (Source, Project type or legacy Type, Intent, Captured) are silently dropped if the database does not have them yet, via `_fit_to_schema`.
 
 ### Task Page
 
