@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.4.2...v0.5.0) (2026-08-17)
+
+
+### Features
+
+* classify project targets ([481e049](https://github.com/iamtokarev/backlog-tamer/commit/481e049c5df18a09a0cacb29a9edb8066bba42db))
+
+
+### Documentation
+
+* update project type docs ([1f64ce4](https://github.com/iamtokarev/backlog-tamer/commit/1f64ce41a5af83429f448b3864f34098654faeb7))
+
 ## [0.4.2](https://github.com/iamtokarev/backlog-tamer/compare/v0.4.1...v0.4.2) (2026-08-10)
 
 
