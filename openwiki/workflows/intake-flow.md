@@ -111,7 +111,7 @@ If the user has made any quick-edit button changes before revising, `_with_manua
 
 ### Quick Edits (No Agent Re-run)
 
-The user can change priority, intent, or resource type directly from the review keyboard without re-running the agent. Tapping a field button (`edit:p:{id}`, `edit:i:{id}`, `edit:t:{id}`) swaps the keyboard for a picker of options. Picking an option calls `ConfirmationStore.apply_manual_edit`, which patches the stored draft in place and records the change in `manual_edits`. The review card re-renders with the updated value.
+The user can change priority, intent, or project type directly from the review keyboard without re-running the agent. Tapping a field button (`edit:p:{id}`, `edit:i:{id}`, `edit:t:{id}`) swaps the keyboard for a picker of options. Picking an option calls `ConfirmationStore.apply_manual_edit`, which patches the stored draft in place and records the change in `manual_edits`. The review card re-renders with the updated value.
 
 ### Refetch After Failed Page Fetch
 

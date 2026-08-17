@@ -20,7 +20,7 @@ def _draft(**overrides) -> ProjectDraft:
     payload = {
         "project_name": "LangGraph: build stateful multi-agent workflows",
         "summary": "Graph of stateful nodes with explicit control flow.",
-        "resource_type": "documentation",
+        "project_type": "tool",
         "intent": "build",
         "priority": "High",
         "source_url": "https://blog.langchain.com/langgraph-multi-agent-workflows/",
@@ -34,7 +34,7 @@ def test_draft_message_renders_every_field():
     message = render_draft_message(_draft())
 
     assert "LangGraph: build stateful multi-agent workflows" in message
-    assert "documentation" in message
+    assert "tool" in message
     assert "build" in message
     assert "High" in message
     assert "Explore" in message
@@ -68,7 +68,7 @@ def test_draft_message_leads_with_the_title_then_a_single_chip_line():
     first, second = message.split("\n")[:2]
 
     assert first == "<b>LangGraph: build stateful multi-agent workflows</b>"
-    assert second == "📘 documentation · 🔨 build · 🔺 High"
+    assert second == "🛠️ tool · 🔨 build · 🔺 High"
 
 
 def test_draft_message_links_the_domain_not_the_raw_url():

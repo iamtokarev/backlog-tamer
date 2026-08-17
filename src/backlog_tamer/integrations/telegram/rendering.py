@@ -34,20 +34,18 @@ FIELD_TYPE = "t"
 DRAFT_FIELD_NAMES = {
     FIELD_PRIORITY: "priority",
     FIELD_INTENT: "intent",
-    FIELD_TYPE: "resource_type",
+    FIELD_TYPE: "project_type",
 }
 
 REVISION_PLACEHOLDER = "What should change?"
 
-RESOURCE_TYPE_ICONS = {
-    "article": "📄",
+PROJECT_TYPE_ICONS = {
     "paper": "🧪",
-    "video": "🎬",
-    "course": "🎓",
-    "documentation": "📘",
     "repository": "📦",
-    "idea": "💡",
-    "unknown": "❔",
+    "product": "🧩",
+    "company": "🏢",
+    "model": "🧠",
+    "tool": "🛠️",
 }
 
 INTENT_ICONS = {
@@ -68,13 +66,13 @@ PRIORITY_ICONS = {
 FIELD_OPTIONS = {
     FIELD_PRIORITY: ("High", "Medium", "Low"),
     FIELD_INTENT: tuple(INTENT_ICONS),
-    FIELD_TYPE: tuple(RESOURCE_TYPE_ICONS),
+    FIELD_TYPE: tuple(PROJECT_TYPE_ICONS),
 }
 
 FIELD_ICONS = {
     FIELD_PRIORITY: PRIORITY_ICONS,
     FIELD_INTENT: INTENT_ICONS,
-    FIELD_TYPE: RESOURCE_TYPE_ICONS,
+    FIELD_TYPE: PROJECT_TYPE_ICONS,
 }
 
 
@@ -91,7 +89,7 @@ def render_change_summary(before: ProjectDraft, after: ProjectDraft) -> str | No
     for field, label in (
         ("priority", "priority"),
         ("intent", "intent"),
-        ("resource_type", "type"),
+        ("project_type", "project type"),
     ):
         old = getattr(before, field)
         new = getattr(after, field)
@@ -184,7 +182,7 @@ def _render_fetch_warning(grounding: DraftGrounding) -> str:
 
 def _render_chips(draft: ProjectDraft) -> str:
     chips = [
-        f"{RESOURCE_TYPE_ICONS.get(draft.resource_type, '❔')} {draft.resource_type}",
+        f"{PROJECT_TYPE_ICONS.get(draft.project_type, '❔')} {draft.project_type}",
         f"{INTENT_ICONS.get(draft.intent, '❔')} {draft.intent}",
         f"{PRIORITY_ICONS.get(draft.priority, '▪️')} {draft.priority}",
     ]
@@ -238,8 +236,8 @@ def build_review_keyboard(
                     callback_data=f"{CALLBACK_EDIT}:{FIELD_INTENT}:{confirmation_id}",
                 ),
                 InlineKeyboardButton(
-                    f"{RESOURCE_TYPE_ICONS.get(draft.resource_type, '❔')} "
-                    f"{draft.resource_type} ▸",
+                    f"{PROJECT_TYPE_ICONS.get(draft.project_type, '❔')} "
+                    f"{draft.project_type} ▸",
                     callback_data=f"{CALLBACK_EDIT}:{FIELD_TYPE}:{confirmation_id}",
                 ),
             ],

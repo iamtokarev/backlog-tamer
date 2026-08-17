@@ -161,7 +161,7 @@ def _build_confirmation() -> ConfirmationRecord:
         draft_proposal=ProjectDraft(
             project_name="Example project",
             summary="A small example project.",
-            resource_type="article",
+            project_type="product",
             intent="explore",
             priority="Medium",
             source_url="https://example.com",

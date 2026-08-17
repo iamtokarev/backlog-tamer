@@ -37,7 +37,7 @@ All three entry points build the same `python-telegram-bot` `Application` via `b
 
 - **`handle_message`** — processes text/caption messages from the allowed user. If a revision is pending for this chat (checked via `TelegramStateStore`), routes the text as revision feedback. Otherwise, calls `IntakeService.start_intake` with an `IncomingContext` parsed from the message. Shows a progress message while the agent works.
 - **`handle_callback`** — processes inline-keyboard callbacks. Beyond the original `approve`/`revise`/`reject`, it now handles:
-  - **Quick edits** (`edit`, `pick`, `back`) — opens a field picker, applies a one-tap change to priority/intent/type without re-running the agent, or returns to the review keyboard. Calls `ConfirmationStore.apply_manual_edit` directly.
+  - **Quick edits** (`edit`, `pick`, `back`) — opens a field picker, applies a one-tap change to priority/intent/project type without re-running the agent, or returns to the review keyboard. Calls `ConfirmationStore.apply_manual_edit` directly.
   - **Refetch** (`refetch`) — clears the fetch_url cache and re-runs the agent with a "fetch again" instruction, for when the original page fetch failed.
   - **Retry** (`retry`) — re-attempts the Notion write after a FAILED status.
   - **Undo** (`undo`) — archives the Notion pages created by a committed confirmation via `IntakeService.undo_commit`.
@@ -91,10 +91,10 @@ Unsupported or unauthorized updates return 200 "ignored" (not an error). Invalid
 `rendering.py` renders all messages as **HTML** (not MarkdownV2) using `telegram.constants.ParseMode.HTML`. It builds:
 
 - `render_progress_message(incoming)` — shown while the agent works (e.g. "🔎 Reading example.com…" or "🧠 Triaging your note…"), replacing the old typing indicator.
-- `render_draft_message(draft, grounding)` — HTML review card: bold title, a chip line (resource type · intent · priority with emoji icons), summary, source link with site name, task checklist, topic tags, and a fetch-warning footer when grounding is degraded.
-- `build_review_keyboard(draft, confirmation_id, grounding)` — inline keyboard with: Approve & save / Reject (row 1), quick-edit pickers for priority, intent, and type (row 2), Revise with a note (row 3), and a conditional "Retry fetch" button when grounding is degraded.
-- `build_picker_keyboard(field_code, confirmation_id)` — replaces the review keyboard with the options for one enum field (priority/intent/type), plus a Back button.
-- `render_change_summary(before, after)` — one-line summary of what a revision moved (priority, intent, type, task count, title, summary, source).
+- `render_draft_message(draft, grounding)` — HTML review card: bold title, a chip line (project type · intent · priority with emoji icons), summary, source link with site name, task checklist, topic tags, and a fetch-warning footer when grounding is degraded.
+- `build_review_keyboard(draft, confirmation_id, grounding)` — inline keyboard with: Approve & save / Reject (row 1), quick-edit pickers for priority, intent, and project type (row 2), Revise with a note (row 3), and a conditional "Retry fetch" button when grounding is degraded.
+- `build_picker_keyboard(field_code, confirmation_id)` — replaces the review keyboard with the options for one enum field (priority/intent/project type), plus a Back button.
+- `render_change_summary(before, after)` — one-line summary of what a revision moved (priority, intent, project type, task count, title, summary, source).
 - `render_terminal_message(draft, status, notion_url, failure_reason, duplicate_created_time)` — final message after commit/reject/fail/undo/duplicate with a status badge. For FAILED, the full draft is re-shown with a retry button. For DUPLICATE, shows when the existing project was created. For UNDONE, tells the user to re-send if they want it back.
 - `build_terminal_keyboard(status, confirmation_id, notion_url)` — post-resolution keyboard: FAILED shows "Retry save"; COMMITTED shows "Open in Notion" + "Undo"; DUPLICATE shows "Open existing" + "Add task there".
 
@@ -124,11 +124,11 @@ Unsupported or unauthorized updates return 200 "ignored" (not an error). Invalid
 - One `httpx.AsyncClient` per commit session (shared across all page POSTs in a commit) via the `_session()` context manager. 20-second timeout. Accepts an optional injected client for testing.
 - Project pages do **not** send `template: {type: "default"}` — Notion rejects a page that sends both a template and children blocks. Task pages still use the default template.
 - Project page body (`build_project_children`) includes: a bookmark block for the source URL, a "Why I saved this" heading with the user's note, "Key points" from grounding, "Next action" to-do blocks for tasks, and a provenance callout.
-- Icon is set from a `resource_type` → emoji mapping.
-- Tags come from `draft.topics` (not type/intent restatement).
+- Icon is set from a `project_type` → emoji mapping (`paper` 🧪, `repository` 📦, `product` 🧩, `company` 🏢, `model` 🧠, `tool` 🛠️).
+- Tags come from `draft.topics`; drafts without topics fall back to `draft.project_type` and `draft.intent`.
 - Task due dates: High = +3 days, Medium = +14 days, Low = no due date.
 - `_fit_to_schema` probes each database's properties and drops any optional properties the database does not have, so a workspace that has not added new columns still gets a usable page.
-- Optional project properties: Source, Type, Intent, Captured. Optional task properties: Due, Source.
+- Optional project properties: Source, Project type, Intent, Captured. Optional task properties: Due, Source. When the database still has the legacy `"Type"` column, `_fit_to_schema` renames `Project type` to `Type` on the fly.
 
 ### Notion Configuration
 
@@ -141,7 +141,7 @@ Required env vars (see `.env.example`):
 | `NOTION_TASKS_DATABASE_ID` | `settings.notion_tasks_database_id` |
 | `NOTION_API_VERSION` | `settings.notion_api_version` (default: `2022-06-28`) |
 
-The Notion projects database must have properties named: `Project name`, `Status`, `Priority`, `Tags`, `Summary`. Optional (silently skipped if missing): `Source`, `Type`, `Intent`, `Captured`. The tasks database must have: `Task name`, `Status`, `Priority`, `Projects`. Optional: `Due`, `Source`.
+The Notion projects database must have properties named: `Project name`, `Status`, `Priority`, `Tags`, `Summary`. Optional (silently skipped if missing): `Source`, `Project type` (or legacy `Type`), `Intent`, `Captured`. The tasks database must have: `Task name`, `Status`, `Priority`, `Projects`. Optional: `Due`, `Source`.
 
 ## Source References
 
