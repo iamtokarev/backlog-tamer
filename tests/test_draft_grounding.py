@@ -13,7 +13,7 @@ def _draft(**overrides) -> ProjectDraft:
     payload = {
         "project_name": "LangGraph: build stateful multi-agent workflows",
         "summary": "Graph of stateful nodes.",
-        "resource_type": "documentation",
+        "project_type": "tool",
         "intent": "build",
         "priority": "High",
         "source_url": "https://blog.langchain.com/langgraph/",

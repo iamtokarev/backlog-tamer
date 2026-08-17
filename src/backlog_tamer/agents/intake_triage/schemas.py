@@ -1,6 +1,17 @@
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
+
+LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE = {
+    "article": "product",
+    "paper": "paper",
+    "video": "product",
+    "course": "product",
+    "documentation": "tool",
+    "repository": "repository",
+    "idea": "product",
+    "unknown": "product",
+}
 
 
 class SourceLink(BaseModel):
@@ -56,16 +67,19 @@ class DraftGrounding(BaseModel):
 class ProjectDraft(BaseModel):
     project_name: str = Field(min_length=1)
     summary: str = Field(min_length=1, max_length=600)
-    resource_type: Literal[
-        "article",
+    project_type: Literal[
         "paper",
-        "video",
-        "course",
-        "documentation",
         "repository",
-        "idea",
-        "unknown",
-    ]
+        "product",
+        "company",
+        "model",
+        "tool",
+    ] = Field(
+        description=(
+            "The kind of thing the user wants to explore, not the page or URL "
+            "that introduced it."
+        )
+    )
     intent: Literal[
         "learn",
         "build",
@@ -78,6 +92,29 @@ class ProjectDraft(BaseModel):
     source_url: str | None = None
     topics: list[str] = Field(default_factory=list, max_length=3)
     tasks: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_resource_type(cls, value: Any) -> Any:
+        """Load drafts persisted before project_type replaced resource_type.
+
+        Source-shaped legacy values cannot always recover the exact target.
+        Preserve the two unambiguous classifications and use a stable closest
+        match for the others so pending confirmations remain reviewable.
+        """
+        if not isinstance(value, dict):
+            return value
+
+        migrated = dict(value)
+        legacy_type = migrated.pop("resource_type", None)
+        project_type = migrated.get("project_type", legacy_type)
+        if isinstance(project_type, str):
+            project_type = LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE.get(
+                project_type,
+                project_type,
+            )
+        migrated["project_type"] = project_type
+        return migrated
 
 
 class ReviewDecision(BaseModel):

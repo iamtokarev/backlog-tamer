@@ -27,7 +27,7 @@ ALL_PROJECT_PROPERTIES = {
     "Project name",
     "Status",
     "Priority",
-    "Type",
+    "Project type",
     "Intent",
     "Source",
     "Tags",
@@ -89,7 +89,7 @@ def test_builds_project_payload_with_summary_source_and_fixed_properties():
     draft = ProjectDraft(
         project_name="Learn ADK callbacks",
         summary="Understand how callbacks fit the approval workflow.",
-        resource_type="documentation",
+        project_type="tool",
         intent="learn",
         priority="Medium",
         source_url="https://example.com/adk",
@@ -113,20 +113,18 @@ def test_builds_project_payload_with_summary_source_and_fixed_properties():
     )
     assert properties["Status"] == {"status": {"name": "Backlog"}}
     assert properties["Priority"] == {"select": {"name": "Medium"}}
-    assert properties["Type"] == {"select": {"name": "documentation"}}
+    assert properties["Project type"] == {"select": {"name": "tool"}}
     assert properties["Intent"] == {"select": {"name": "learn"}}
     assert properties["Source"] == {"url": "https://example.com/adk"}
     assert properties["Captured"] == {"date": {"start": "2026-07-26"}}
-    assert properties["Tags"] == {
-        "multi_select": [{"name": "documentation"}, {"name": "learn"}]
-    }
+    assert properties["Tags"] == {"multi_select": [{"name": "tool"}, {"name": "learn"}]}
 
 
 def test_summary_property_carries_only_the_summary():
     draft = ProjectDraft(
         project_name="Learn ADK callbacks",
         summary="Understand how callbacks fit the approval workflow.",
-        resource_type="documentation",
+        project_type="tool",
         intent="learn",
         priority="Medium",
         source_url="https://example.com/adk",
@@ -150,7 +148,7 @@ def test_project_payload_omits_source_when_the_draft_has_none():
     draft = ProjectDraft(
         project_name="Idea: batch the eval runs",
         summary="Batch nightly evals instead of per-commit.",
-        resource_type="idea",
+        project_type="product",
         intent="build",
         priority="Low",
         tasks=["Sketch"],
@@ -168,7 +166,7 @@ def test_builds_project_payload_normalizes_low_signal_tags():
     draft = ProjectDraft(
         project_name="Mystery item",
         summary="Figure out what this is.",
-        resource_type="unknown",
+        project_type="product",
         intent="unclear",
         priority="Low",
         tasks=["Review item"],
@@ -181,11 +179,13 @@ def test_builds_project_payload_normalizes_low_signal_tags():
 
     payload = writer.build_project_payload(draft)
 
-    assert payload["properties"]["Tags"] == {"multi_select": [{"name": "explore"}]}
-    assert payload["icon"] == {"type": "emoji", "emoji": "❔"}
+    assert payload["properties"]["Tags"] == {
+        "multi_select": [{"name": "product"}, {"name": "explore"}]
+    }
+    assert payload["icon"] == {"type": "emoji", "emoji": "🧩"}
 
 
-def test_project_page_icon_follows_the_resource_type():
+def test_project_page_icon_follows_the_project_type():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
@@ -193,24 +193,33 @@ def test_project_page_icon_follows_the_resource_type():
     )
 
     icons = {
-        resource_type: writer.build_project_payload(
+        project_type: writer.build_project_payload(
             ProjectDraft(
                 project_name="Example",
                 summary="Example summary.",
-                resource_type=resource_type,
+                project_type=project_type,
                 intent="learn",
                 priority="Low",
                 tasks=["Read"],
             )
         )["icon"]["emoji"]
-        for resource_type in ("article", "video", "repository", "documentation")
+        for project_type in (
+            "paper",
+            "repository",
+            "product",
+            "company",
+            "model",
+            "tool",
+        )
     }
 
     assert icons == {
-        "article": "📄",
-        "video": "🎬",
+        "paper": "🧪",
         "repository": "📦",
-        "documentation": "📘",
+        "product": "🧩",
+        "company": "🏢",
+        "model": "🧠",
+        "tool": "🛠️",
     }
 
 
@@ -247,7 +256,7 @@ def test_commit_reuses_one_client_and_writes_tasks_concurrently():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="High",
         tasks=["Read", "Summarise", "Apply"],
@@ -275,7 +284,7 @@ def test_tasks_relate_back_to_the_created_project():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="High",
         tasks=["Read"],
@@ -298,7 +307,7 @@ def test_commit_skips_properties_the_database_does_not_have():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="High",
         source_url="https://example.com",
@@ -309,7 +318,34 @@ def test_commit_skips_properties_the_database_does_not_have():
 
     _, project_payload = client.posts[0]
     assert set(project_payload["properties"]) == {"Project name", "Status", "Summary"}
-    assert project_payload["icon"] == {"type": "emoji", "emoji": "📄"}
+    assert project_payload["icon"] == {"type": "emoji", "emoji": "🧩"}
+
+
+def test_commit_uses_legacy_type_column_until_notion_is_renamed():
+    client = FakeClient(
+        project_properties=(ALL_PROJECT_PROPERTIES - {"Project type"}) | {"Type"}
+    )
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+        client=client,
+    )
+    draft = ProjectDraft(
+        project_name="Cursor Origin: explore an agentic git forge",
+        summary="A git forge designed for agent-driven development.",
+        project_type="product",
+        intent="explore",
+        priority="Medium",
+        source_url="https://cursor.com/origin",
+        tasks=["Explore"],
+    )
+
+    asyncio.run(writer.create_project_with_tasks(draft))
+
+    _, project_payload = client.posts[0]
+    assert "Project type" not in project_payload["properties"]
+    assert project_payload["properties"]["Type"] == {"select": {"name": "product"}}
 
 
 def test_commit_reads_the_schema_once_per_writer():
@@ -323,7 +359,7 @@ def test_commit_reads_the_schema_once_per_writer():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="High",
         tasks=["Read"],
@@ -373,8 +409,8 @@ def test_schema_report_separates_renamed_columns_from_not_yet_added_ones():
     assert report.skipped_project_properties == [
         "Captured",
         "Intent",
+        "Project type",
         "Source",
-        "Type",
     ]
 
 
@@ -397,7 +433,7 @@ def test_page_body_bookmarks_the_source_and_keeps_the_original_note():
     draft = ProjectDraft(
         project_name="LangGraph: build stateful multi-agent workflows",
         summary="Graph of stateful nodes.",
-        resource_type="documentation",
+        project_type="tool",
         intent="build",
         priority="High",
         source_url="https://blog.langchain.com/langgraph/",
@@ -437,7 +473,7 @@ def test_page_body_skips_the_note_when_the_message_was_only_a_link():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="Low",
         source_url="https://example.com",
@@ -465,7 +501,7 @@ def test_page_body_splits_text_over_the_notion_fragment_limit():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="idea",
+        project_type="product",
         intent="build",
         priority="Low",
         tasks=["Sketch"],
@@ -490,7 +526,7 @@ def test_tags_carry_topics_when_the_draft_has_them():
     draft = ProjectDraft(
         project_name="LangGraph: build stateful multi-agent workflows",
         summary="Graph of stateful nodes.",
-        resource_type="documentation",
+        project_type="tool",
         intent="build",
         priority="High",
         topics=["LangGraph", "Multi-Agent", "orchestration"],
@@ -517,7 +553,7 @@ def test_topic_tags_drop_duplicates_and_commas():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="Low",
         topics=["rag", "RAG", "vector, search"],
@@ -596,7 +632,7 @@ def test_task_properties_are_filtered_against_the_tasks_database():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="High",
         source_url="https://example.com",
@@ -623,7 +659,7 @@ def test_a_project_page_never_sends_a_template_alongside_its_body():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="Low",
         tasks=["Read"],
@@ -657,7 +693,7 @@ def test_notion_error_message_reaches_the_caller():
     draft = ProjectDraft(
         project_name="Example",
         summary="Example summary.",
-        resource_type="article",
+        project_type="product",
         intent="learn",
         priority="Low",
         tasks=["Read"],

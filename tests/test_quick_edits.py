@@ -6,7 +6,11 @@ from uuid import uuid4
 import pytest
 
 from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
-from backlog_tamer.application.confirmation_store import ConfirmationStore, utc_now
+from backlog_tamer.application.confirmation_store import (
+    ConfirmationStore,
+    _load_manual_edits,
+    utc_now,
+)
 from backlog_tamer.application.intake_service import _with_manual_edits
 from backlog_tamer.application.models import ConfirmationRecord, ConfirmationStatus
 from backlog_tamer.integrations.telegram.rendering import (
@@ -67,6 +71,27 @@ def test_quick_edits_accumulate_and_clear_on_the_next_agent_draft(tmp_path: Path
     redrafted = store.get(record.confirmation_id)
     assert redrafted is not None
     assert redrafted.manual_edits == {}
+
+
+def test_old_type_picker_value_is_normalized_for_an_in_flight_draft(tmp_path: Path):
+    store = _build_store(tmp_path)
+    record = _build_confirmation()
+    store.create_pending(record)
+
+    updated = store.apply_manual_edit(
+        confirmation_id=record.confirmation_id,
+        field="project_type",
+        value="documentation",
+    )
+
+    assert updated.draft_proposal.project_type == "tool"
+    assert updated.manual_edits == {"project_type": "tool"}
+
+
+def test_persisted_resource_type_manual_edit_is_migrated_on_load():
+    edits = _load_manual_edits('{"resource_type": "repository"}')
+
+    assert edits == {"project_type": "repository"}
 
 
 def test_quick_edit_is_rejected_once_the_draft_is_resolved(tmp_path: Path):
@@ -149,7 +174,7 @@ def _build_confirmation() -> ConfirmationRecord:
         draft_proposal=ProjectDraft(
             project_name="Example project",
             summary="A small example project.",
-            resource_type="article",
+            project_type="product",
             intent="explore",
             priority="Medium",
             source_url="https://example.com",

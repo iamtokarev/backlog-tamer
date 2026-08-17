@@ -8,6 +8,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from sqlalchemy.pool import NullPool
 
 from backlog_tamer.agents.intake_triage.schemas import (
+    LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE,
     DraftGrounding,
     IncomingContext,
     ProjectDraft,
@@ -116,10 +117,14 @@ class ConfirmationStore:
                 )
 
             draft = ProjectDraft.model_validate_json(row.draft_proposal_json)
-            updated = draft.model_copy(update={field: value})
+            updated = ProjectDraft.model_validate({**draft.model_dump(), field: value})
+            normalized_value = str(getattr(updated, field))
             row.draft_proposal_json = updated.model_dump_json()
             row.manual_edits_json = json.dumps(
-                {**_load_manual_edits(row.manual_edits_json), field: value}
+                {
+                    **_load_manual_edits(row.manual_edits_json),
+                    field: normalized_value,
+                }
             )
             row.updated_at = utc_now()
             return self._record_from_row(row)
@@ -347,4 +352,11 @@ def _load_manual_edits(raw: str | None) -> dict[str, str]:
         return {}
     if not isinstance(parsed, dict):
         return {}
-    return {str(key): str(value) for key, value in parsed.items()}
+    edits = {str(key): str(value) for key, value in parsed.items()}
+    legacy_type = edits.pop("resource_type", None)
+    if legacy_type is not None and "project_type" not in edits:
+        edits["project_type"] = LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE.get(
+            legacy_type,
+            legacy_type,
+        )
+    return edits

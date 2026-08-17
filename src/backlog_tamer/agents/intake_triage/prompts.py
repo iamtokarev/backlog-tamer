@@ -13,7 +13,7 @@ tool results.
 Rules:
 - If a URL is present and more context is needed, call `fetch_url`.
 - Use `fetch_url` to understand the page, not to copy it.
-- Infer the best possible project_name, summary, resource_type, intent,
+- Infer the best possible project_name, summary, project_type, intent,
   priority, source_url, and tasks.
 - project_name is the backlog title the user will scan weeks later, so make
   it self-explanatory on its own.
@@ -31,7 +31,14 @@ Rules:
   "resource".
 - Do not pad project_name with marketing hype or claims the source does not
   support.
-- resource_type describes what the item is.
+- project_type describes the thing the user wants to explore, not the webpage,
+  document, changelog entry, or URL that introduced it.
+- Choose project_type from this compact vocabulary: paper, repository, product,
+  company, model, tool.
+- Classify the target itself. A Cursor changelog or documentation page that
+  introduces Origin is project_type "product", not documentation. A GitHub page
+  whose target is an open-source repository is "repository". A research paper is
+  "paper" even when it is linked through a publisher or index page.
 - intent describes what the user likely wants to do with it.
 - Use intent "reference" when the item should be kept mainly for lookup.
 - Use intent "explore" when the next step is lightweight investigation.
@@ -41,14 +48,14 @@ Rules:
 - topics are up to 3 lowercase subject tags naming the technology or
   subject, e.g. ["langgraph", "multi-agent", "orchestration"].
 - Choose topics the user would search for later, not restatements of
-  resource_type or intent, and never generic words like "tool" or "guide".
+  project_type or intent, and never generic words like "tool" or "guide".
 - Use fewer topics, or none, rather than inventing ones the source does
   not support.
 - Choose priority based on likely urgency and usefulness. Default to
   "Medium" when unclear.
-- Default to exactly one task, named by intent: use "Read" for articles,
-  papers, and other study material; use "Explore" for repositories and
-  tools.
+- Default to exactly one task, named by intent: use "Read" for papers and
+  other study material; use "Explore" for repositories, products, companies,
+  models, and tools.
 - Only produce multiple tasks (up to 5) when the user's note explicitly
   asks for a breakdown into steps. Prefer short actionable task names.
 - In revision mode, treat the current ProjectDraft as the baseline.
@@ -78,7 +85,7 @@ links:
 </intake>
 
 <requirements>
-- infer project_name, summary, resource_type, intent, priority, source_url, and tasks
+- infer project_name, summary, project_type, intent, priority, source_url, and tasks
 - make project_name a descriptive 4-10 word phrase, never a bare repo or page name
 - use fetch_url if the links are useful for grounding
 - keep the result concise and practical
@@ -99,7 +106,7 @@ Reply with one of:
 REVIEW_DRAFT_SNAPSHOT_TEMPLATE = """
 project_name: {project_name}
 summary: {summary}
-resource_type: {resource_type}
+project_type: {project_type}
 intent: {intent}
 priority: {priority}
 source_url: {source_url}
@@ -222,7 +229,7 @@ def build_review_draft_snapshot(
     *,
     project_name: str,
     summary: str,
-    resource_type: str,
+    project_type: str,
     intent: str,
     priority: str,
     source_url: str,
@@ -239,7 +246,7 @@ def build_review_draft_snapshot(
     return REVIEW_DRAFT_SNAPSHOT_TEMPLATE.format(
         project_name=project_name,
         summary=summary,
-        resource_type=resource_type,
+        project_type=project_type,
         intent=intent,
         priority=priority,
         source_url=source_url,
@@ -257,7 +264,7 @@ def build_review_snapshot(
     return build_review_draft_snapshot(
         project_name=draft.project_name,
         summary=draft.summary,
-        resource_type=draft.resource_type,
+        project_type=draft.project_type,
         intent=draft.intent,
         priority=draft.priority,
         source_url=source_url,

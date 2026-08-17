@@ -29,7 +29,8 @@ PROJECT_NAME_PROPERTY = "Project name"
 PROJECT_STATUS_PROPERTY = "Status"
 PROJECT_PRIORITY_PROPERTY = "Priority"
 PROJECT_SOURCE_PROPERTY = "Source"
-PROJECT_TYPE_PROPERTY = "Type"
+PROJECT_TYPE_PROPERTY = "Project type"
+LEGACY_PROJECT_TYPE_PROPERTY = "Type"
 PROJECT_INTENT_PROPERTY = "Intent"
 PROJECT_TAGS_PROPERTY = "Tags"
 PROJECT_CAPTURED_PROPERTY = "Captured"
@@ -57,15 +58,13 @@ OPTIONAL_TASK_PROPERTIES = frozenset({TASK_DUE_PROPERTY, TASK_SOURCE_PROPERTY})
 # A soft first-touch date, so an item has a "when" and can be scheduled.
 PRIORITY_DUE_DAYS = {"High": 3, "Medium": 14, "Low": None}
 
-RESOURCE_TYPE_EMOJI = {
-    "article": "📄",
+PROJECT_TYPE_EMOJI = {
     "paper": "🧪",
-    "video": "🎬",
-    "course": "🎓",
-    "documentation": "📘",
     "repository": "📦",
-    "idea": "💡",
-    "unknown": "❔",
+    "product": "🧩",
+    "company": "🏢",
+    "model": "🧠",
+    "tool": "🛠️",
 }
 
 
@@ -177,7 +176,7 @@ class NotionWriter:
             PROJECT_NAME_PROPERTY: _title(draft.project_name),
             PROJECT_STATUS_PROPERTY: _status(PROJECT_STATUS),
             PROJECT_PRIORITY_PROPERTY: _select(draft.priority),
-            PROJECT_TYPE_PROPERTY: _select(draft.resource_type),
+            PROJECT_TYPE_PROPERTY: _select(draft.project_type),
             PROJECT_INTENT_PROPERTY: _select(draft.intent),
             PROJECT_TAGS_PROPERTY: {"multi_select": _draft_tags(draft)},
             PROJECT_CAPTURED_PROPERTY: _date(captured_on),
@@ -190,7 +189,7 @@ class NotionWriter:
         # and children, and the body we build is the point of the page.
         return {
             "parent": {"database_id": self.projects_database_id},
-            "icon": _emoji(RESOURCE_TYPE_EMOJI.get(draft.resource_type, "❔")),
+            "icon": _emoji(PROJECT_TYPE_EMOJI.get(draft.project_type, "❔")),
             "properties": properties,
             "children": build_project_children(
                 draft,
@@ -316,7 +315,8 @@ class NotionWriter:
     ) -> dict[str, Any]:
         """Drop properties the target database does not have.
 
-        Source, Type, Intent, Captured and Due date are recent additions; a
+        Source, Project type (formerly Type), Intent, Captured and Due date are
+        recent additions; a
         workspace that has not added the columns yet still gets a usable page
         instead of a 400 at commit time.
         """
@@ -325,9 +325,23 @@ class NotionWriter:
             return payload
 
         properties = payload["properties"]
+        if (
+            database_id == self.projects_database_id
+            and PROJECT_TYPE_PROPERTY in properties
+            and PROJECT_TYPE_PROPERTY not in known
+            and LEGACY_PROJECT_TYPE_PROPERTY in known
+        ):
+            properties = {
+                (
+                    LEGACY_PROJECT_TYPE_PROPERTY
+                    if name == PROJECT_TYPE_PROPERTY
+                    else name
+                ): value
+                for name, value in properties.items()
+            }
         unknown = sorted(set(properties) - known)
         if not unknown:
-            return payload
+            return {**payload, "properties": properties}
 
         logger.warning(
             "Skipping Notion properties missing from database %s: %s",
@@ -380,13 +394,15 @@ class NotionWriter:
         sample = ProjectDraft(
             project_name="schema probe",
             summary="schema probe",
-            resource_type="article",
+            project_type="product",
             intent="learn",
             priority="Medium",
             source_url="https://example.com",
             tasks=["probe"],
         )
         wanted_project = set(self.build_project_payload(sample)["properties"])
+        if LEGACY_PROJECT_TYPE_PROPERTY in project_properties:
+            project_properties.add(PROJECT_TYPE_PROPERTY)
         wanted_task = set(
             self.build_task_payload(
                 task_name="probe",
@@ -605,8 +621,7 @@ def _draft_tags(draft: ProjectDraft) -> list[dict[str, str]]:
         return [{"name": topic} for topic in _normalized_topics(draft.topics)]
 
     tags: list[str] = []
-    if draft.resource_type != "unknown":
-        tags.append(draft.resource_type)
+    tags.append(draft.project_type)
     tags.append("explore" if draft.intent == "unclear" else draft.intent)
     return [{"name": tag} for tag in tags]
 
