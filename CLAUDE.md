@@ -66,12 +66,19 @@ The writer reads each database's schema once and silently drops properties that
 do not exist, so these can be added whenever — until then the feature is just
 absent:
 
-- **Projects**: `Source` (url), `Type` (select), `Intent` (select), `Captured` (date)
+- **Projects**: `Source` (url), `Project type` (select, formerly `Type`), `Intent` (select), `Captured` (date)
 - **Tasks**: `Due` (date), `Source` (url)
+
+That silence is how `Project type` and `Intent` went missing from the live
+workspace for months while the agent kept classifying into them. Run
+`scripts/migrate_notion_schema.py` (dry-run by default, `--apply` to write) to
+add any of the optional columns and backfill them from the page bookmark,
+`created_time`, and the legacy type/intent values still in `Tags`.
 
 Duplicate detection queries Projects by `Source`, so without that column every
 send creates a new project. `worker_handler` with `{"healthcheck": true}`
-reports which optional properties are being skipped.
+reports `skipped_notion_properties` and, for gaps that disable a feature rather
+than just blanking a field, `degraded_capabilities`.
 
 ## Architecture
 
@@ -95,7 +102,13 @@ Terraform in `infra/terraform/` (Lambda ×2, SQS + DLQ, ECR, Secrets Manager). `
 
 ## OpenWiki
 
-This repository uses OpenWiki for recurring code documentation. Start with `openwiki/quickstart.md`, then follow its links to architecture, workflows, domain concepts, operations, integrations, testing guidance, and source maps.
+See [AGENTS.md](AGENTS.md) for OpenWiki agent instructions.
+
+<!-- OPENWIKI:END -->
+time context, not required startup reading.
+
+- Treat source code and tests as authoritative. A brief's unknowns and review items are verification gaps, not automatic requirements.
+- Prefer the narrowest quiet validation that proves the changed behavior. Preserve complete failure output.
 
 The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
 
