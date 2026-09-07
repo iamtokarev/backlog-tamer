@@ -60,4 +60,4 @@ Optional: `AGENT__MODEL` (default `gpt-5.6-luna`), `AGENT__REASONING_EFFORT` (de
 
 ## Backlog
 
-- **URL fetch tool internals** (`src/backlog_tamer/agents/intake_triage/tools/fetch_url.py`) — SSRF protection (pinned-IP connections, DNS rebinding prevention, manual redirect handling), HTML/PDF parsing, and X/Twitter oEmbed handling are not yet documented in detail. Deferred because the tool is well-tested and self-contained; a future run could document the security model and content extraction pipeline.
+- **URL fetch tool internals** (`src/backlog_tamer/agents/intake_triage/tools/fetch_url.py`) — SSRF protection (pinned-IP connections, DNS rebinding prevention, manual redirect handling), HTML/PDF parsing, and X/Twitter oEmbed handling are not yet documented in detail. The campaign-parameter stripping and key-point furniture filtering added in `e5ca04f` are covered in [Intake Workflow](workflows/intake-flow.md) and [Integrations](integrations/telegram-and-notion.md); the security model and the rest of the content extraction pipeline remain deferred. The tool is well-tested (`tests/test_fetch_url.py`) and self-contained.

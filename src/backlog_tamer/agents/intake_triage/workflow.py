@@ -21,17 +21,25 @@ FETCHED_CONTEXT_STATE_KEY = "fetched_context"
 DRAFT_SNAPSHOT_STATE_KEY = "draft_snapshot"
 
 
-def build_triage_message(context: IncomingContext) -> types.Content:
+def build_triage_message(
+    context: IncomingContext,
+    known_topics: list[str] | None = None,
+) -> types.Content:
     """Build the user message passed into the drafting agent."""
     return types.Content(
         role="user",
-        parts=[types.Part.from_text(text=build_triage_prompt(context))],
+        parts=[
+            types.Part.from_text(text=build_triage_prompt(context, known_topics)),
+        ],
     )
 
 
-def build_triage_state_delta(context: IncomingContext) -> dict[str, object]:
+def build_triage_state_delta(
+    context: IncomingContext,
+    known_topics: list[str] | None = None,
+) -> dict[str, object]:
     return {
-        TRIAGE_INPUT_STATE_KEY: build_triage_prompt(context),
+        TRIAGE_INPUT_STATE_KEY: build_triage_prompt(context, known_topics),
         REVIEW_HISTORY_STATE_KEY: [],
         FETCHED_CONTEXT_STATE_KEY: {},
     }

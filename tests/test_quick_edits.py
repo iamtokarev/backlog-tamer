@@ -12,7 +12,11 @@ from backlog_tamer.application.confirmation_store import (
     utc_now,
 )
 from backlog_tamer.application.intake_service import _with_manual_edits
-from backlog_tamer.application.models import ConfirmationRecord, ConfirmationStatus
+from backlog_tamer.application.models import (
+    ConfirmationRecord,
+    ConfirmationStatus,
+    ManualEdit,
+)
 from backlog_tamer.integrations.telegram.rendering import (
     FIELD_OPTIONS,
     FIELD_TYPE,
@@ -36,7 +40,9 @@ def test_quick_edit_patches_the_draft_without_touching_the_agent(tmp_path: Path)
 
     assert updated.draft_proposal.priority == "Low"
     assert updated.draft_proposal.project_name == "Example project"
-    assert updated.manual_edits == {"priority": "Low"}
+    assert updated.manual_edits == {
+        "priority": ManualEdit(before="Medium", after="Low")
+    }
 
     stored = store.get(record.confirmation_id)
     assert stored is not None
@@ -58,7 +64,10 @@ def test_quick_edits_accumulate_and_clear_on_the_next_agent_draft(tmp_path: Path
         field="intent",
         value="reference",
     )
-    assert edited.manual_edits == {"priority": "Low", "intent": "reference"}
+    assert edited.manual_edits == {
+        "priority": ManualEdit(before="Medium", after="Low"),
+        "intent": ManualEdit(before="explore", after="reference"),
+    }
 
     store.update_after_resume(
         confirmation_id=record.confirmation_id,
@@ -85,13 +94,15 @@ def test_old_type_picker_value_is_normalized_for_an_in_flight_draft(tmp_path: Pa
     )
 
     assert updated.draft_proposal.project_type == "tool"
-    assert updated.manual_edits == {"project_type": "tool"}
+    assert updated.manual_edits == {
+        "project_type": ManualEdit(before="product", after="tool")
+    }
 
 
 def test_persisted_resource_type_manual_edit_is_migrated_on_load():
     edits = _load_manual_edits('{"resource_type": "repository"}')
 
-    assert edits == {"project_type": "repository"}
+    assert edits == {"project_type": ManualEdit(before="", after="repository")}
 
 
 def test_quick_edit_is_rejected_once_the_draft_is_resolved(tmp_path: Path):
@@ -109,7 +120,10 @@ def test_quick_edit_is_rejected_once_the_draft_is_resolved(tmp_path: Path):
 
 
 def test_manual_edits_are_replayed_into_free_text_revisions():
-    prompt = _with_manual_edits("make the title shorter", {"priority": "Low"})
+    prompt = _with_manual_edits(
+        "make the title shorter",
+        {"priority": ManualEdit(before="Medium", after="Low")},
+    )
 
     assert "priority=Low" in prompt
     assert prompt.endswith("make the title shorter")

@@ -197,3 +197,25 @@ def _lambda_event(payload: dict, *, secret: str) -> dict:
         "body": json.dumps(payload),
         "isBase64Encoded": False,
     }
+
+
+def test_worker_handler_healthcheck_reports_a_degraded_capability(
+    healthcheck_env,
+    monkeypatch,
+):
+    """A missing Source column turns duplicate detection off, silently."""
+
+    async def degraded_schema(self):
+        return NotionSchemaReport(
+            missing_project_properties=[],
+            missing_task_properties=[],
+            skipped_project_properties=["Source"],
+            degraded_capabilities=["duplicate-detection"],
+        )
+
+    monkeypatch.setattr(NotionWriter, "describe_schema", degraded_schema)
+
+    result = worker_handler({"healthcheck": True}, SimpleNamespace())
+
+    assert result["skipped_notion_properties"] == ["Source"]
+    assert result["degraded_capabilities"] == ["duplicate-detection"]

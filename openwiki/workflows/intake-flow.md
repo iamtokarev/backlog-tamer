@@ -57,7 +57,7 @@ flowchart TD
 
 ## End-to-End Request Flow
 
-The `IntakeService` (`src/backlog_tamer/application/intake_service.py`) orchestrates the workflow across multiple interactions:
+The `IntakeService` (`src/backlog_tamer/application/intake_service.py`) orchestrates the workflow across multiple interactions. Before drafting, `start_intake` loads the workspace's existing Notion tag vocabulary via `IntakeService._known_topics()` → `NotionWriter.list_tag_options()` and passes it as `known_topics` into `build_triage_prompt`, so the agent reuses an existing tag spelling instead of minting a near-duplicate. The tag lookup is best-effort and never blocks a capture if Notion is unreachable.
 
 ```mermaid
 sequenceDiagram
@@ -111,7 +111,15 @@ If the user has made any quick-edit button changes before revising, `_with_manua
 
 ### Quick Edits (No Agent Re-run)
 
-The user can change priority, intent, or project type directly from the review keyboard without re-running the agent. Tapping a field button (`edit:p:{id}`, `edit:i:{id}`, `edit:t:{id}`) swaps the keyboard for a picker of options. Picking an option calls `ConfirmationStore.apply_manual_edit`, which patches the stored draft in place and records the change in `manual_edits`. The review card re-renders with the updated value.
+The user can change priority, intent, or project type directly from the review keyboard without re-running the agent. Tapping a field button (`edit:p:{id}`, `edit:i:{id}`, `edit:t:{id}`) swaps the keyboard for a picker of options. Picking an option calls `ConfirmationStore.apply_manual_edit`, which patches the stored draft in place and records the change in `manual_edits` as a `ManualEdit(before=..., after=...)` pair. The `before` value is the agent's original answer and is kept stable across repeated taps on the same field, so a correction stays measurable. The review card re-renders with the updated value.
+
+A legacy `resource_type` value picked on an in-flight draft is normalized to the new `project_type` vocabulary through `LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE`, and rows persisted under the old `resource_type` key are migrated to `project_type` on load.
+
+### Task Name Composition
+
+Before the draft is shown to anyone, `IntakeService._try_extract_draft_from_state` runs `with_composed_task_names` (in `src/backlog_tamer/agents/intake_triage/task_names.py`) so the review card, Telegram, and Notion all show the same task names. The default task — a single task carrying only a bare verb like `"Read"` or `"Explore"` — is rewritten to `"<verb>: <short_name>"`. The verb is a mechanical function of intent (`learn`→Read, `explore`→Explore, `build`→Build, `research`→Research, `reference`→"Skim and file", `unclear`→Explore), overridden by project type (`course`→"Work through", `video`→Watch). The subject is `draft.effective_short_name`.
+
+The rewrite is idempotent and narrow by design: a name that already reads `"<verb>: <subject>"` is returned unchanged, multi-task breakdowns are left alone, and authored names (anything not a bare verb) are never overwritten. This moved task naming out of the prompt — where the same rule had produced `"Explore"` for one course and `"Read"` for another — into deterministic code.
 
 ### Refetch After Failed Page Fetch
 
@@ -119,11 +127,15 @@ When the fetch tool fails, the review card shows a warning and a "Retry fetch" b
 
 ### Duplicate Detection
 
-Before creating a new project, `finalize_approval` calls `NotionWriter.find_project_by_source` with the draft's canonical URL (from grounding) or source URL. If an existing project with that URL is found, the confirmation is marked `DUPLICATE` instead of `COMMITTED`, and the user is offered "Open existing" and "Add task there" buttons. Choosing "Add task there" calls `IntakeService.add_to_existing_project`, which attaches the draft's tasks to the existing project page.
+Before creating a new project, `finalize_approval` calls `NotionWriter.find_project_by_source` with the draft's canonical URL (from grounding) or source URL. `NotionWriter` stores the canonical URL via `commit_source_url(draft, grounding)` (preferring `grounding.canonical_url` over `draft.source_url`), and `fetch_url` strips campaign parameters (`utm_*`, `fbclid`, `gclid`, etc.) from the normalized URL, so a re-capture of the same page through a different tracking link can match the earlier row. If an existing project with that URL is found, the confirmation is marked `DUPLICATE` instead of `COMMITTED`, and the user is offered "Open existing" and "Add task there" buttons. Choosing "Add task there" calls `IntakeService.add_to_existing_project`, which attaches the draft's tasks to the existing project page.
 
 ### Undo
 
 After a successful commit, the user can tap "Undo" to archive the Notion pages (project + tasks) via `NotionWriter.archive_pages`. The confirmation transitions from `COMMITTED` to `UNDONE`, and the Notion page IDs are cleared from the record.
+
+### Correction Signal at Approval
+
+`finalize_approval` calls `IntakeService._log_corrections`, which emits one structured `intake_correction` log line per approval listing each field where the user moved the agent off its answer (`{field: {agent: before, user: after}}`). Quick edits run no model and emit no trace, so without this line a week of hand-corrections reads as a clean approval rate. The signal comes from `ConfirmationRecord.corrected_fields`, the subset of `manual_edits` where `before` is non-empty and differs from `after`.
 
 ### Failed Save and Retry
 
@@ -165,9 +177,10 @@ stateDiagram-v2
 
 | File | Purpose |
 |------|---------|
-| `src/backlog_tamer/agents/intake_triage/workflow.py` | ADK workflow graph, node functions, state keys |
-| `src/backlog_tamer/agents/intake_triage/prompts.py` | All prompt templates and builders |
-| `src/backlog_tamer/application/intake_service.py` | `start_intake`, `resume_intake`, `finalize_approval`, `undo_commit`, `add_to_existing_project` |
+| `src/backlog_tamer/agents/intake_triage/workflow.py` | ADK workflow graph, node functions, state keys; `build_triage_message`/`build_triage_state_delta` thread `known_topics` |
+| `src/backlog_tamer/agents/intake_triage/prompts.py` | All prompt templates and builders; `build_triage_prompt` injects the existing tag vocabulary (`MAX_KNOWN_TOPICS`) |
+| `src/backlog_tamer/agents/intake_triage/task_names.py` | `compose_task_names`, `with_composed_task_names` — default task naming |
+| `src/backlog_tamer/application/intake_service.py` | `start_intake`, `resume_intake`, `finalize_approval`, `undo_commit`, `add_to_existing_project`, `_known_topics`, `_log_corrections` |
 | `src/backlog_tamer/application/confirmation_store.py` | `mark_committing_once` and all status transitions |
 | `src/backlog_tamer/application/models.py` | `ConfirmationStatus` enum |
 | `src/backlog_tamer/dev/run_intake_workflow.py` | Standable workflow runner for dev |

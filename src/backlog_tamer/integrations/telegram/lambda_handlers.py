@@ -117,6 +117,9 @@ def _healthcheck() -> dict[str, Any]:
         "ok": True,
         "version": installed_version,
         "skipped_notion_properties": schema.skipped_project_properties,
+        # A blank column is cosmetic; a missing Source turns duplicate
+        # detection off without anything else saying so.
+        "degraded_capabilities": schema.degraded_capabilities,
     }
 
 

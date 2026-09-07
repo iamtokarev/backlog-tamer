@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
@@ -60,12 +61,19 @@ PRIORITY_DUE_DAYS = {"High": 3, "Medium": 14, "Low": None}
 
 PROJECT_TYPE_EMOJI = {
     "paper": "🧪",
+    "article": "📰",
+    "video": "🎬",
+    "course": "🎓",
     "repository": "📦",
     "product": "🧩",
     "company": "🏢",
     "model": "🧠",
     "tool": "🛠️",
 }
+
+# Capabilities that quietly stop working when an optional column is absent,
+# rather than just leaving a field blank.
+PROPERTY_CAPABILITIES = {PROJECT_SOURCE_PROPERTY: "duplicate-detection"}
 
 
 @dataclass(frozen=True)
@@ -87,6 +95,7 @@ class NotionSchemaReport:
     missing_project_properties: list[str]
     missing_task_properties: list[str]
     skipped_project_properties: list[str]
+    degraded_capabilities: list[str] = field(default_factory=list)
 
     @property
     def is_healthy(self) -> bool:
@@ -109,6 +118,7 @@ class NotionWriter:
         self.api_version = api_version
         self.client = client
         self._property_cache: dict[str, set[str]] = {}
+        self._schema_cache: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def from_settings(cls, settings: Settings) -> NotionWriter:
@@ -127,6 +137,7 @@ class NotionWriter:
         incoming_context: IncomingContext | None = None,
         grounding: DraftGrounding | None = None,
     ) -> NotionCommitResult:
+        known_tags = await self.list_tag_options()
         async with self._session() as client:
             payload = await self._fit_to_schema(
                 client,
@@ -135,6 +146,7 @@ class NotionWriter:
                     draft,
                     incoming_context=incoming_context,
                     grounding=grounding,
+                    known_tags=known_tags,
                 ),
             )
             project = await self._post_page(client, payload)
@@ -149,7 +161,7 @@ class NotionWriter:
                         task_name=task_name,
                         priority=draft.priority,
                         project_id=project_id,
-                        source_url=draft.source_url,
+                        source_url=commit_source_url(draft, grounding),
                     ),
                 )
                 for task_name in draft.tasks
@@ -170,20 +182,22 @@ class NotionWriter:
         captured_at: date | None = None,
         incoming_context: IncomingContext | None = None,
         grounding: DraftGrounding | None = None,
+        known_tags: list[str] | None = None,
     ) -> dict[str, Any]:
         captured_on = captured_at or date.today()
+        source_url = commit_source_url(draft, grounding)
         properties: dict[str, Any] = {
             PROJECT_NAME_PROPERTY: _title(draft.project_name),
             PROJECT_STATUS_PROPERTY: _status(PROJECT_STATUS),
             PROJECT_PRIORITY_PROPERTY: _select(draft.priority),
             PROJECT_TYPE_PROPERTY: _select(draft.project_type),
             PROJECT_INTENT_PROPERTY: _select(draft.intent),
-            PROJECT_TAGS_PROPERTY: {"multi_select": _draft_tags(draft)},
+            PROJECT_TAGS_PROPERTY: {"multi_select": _draft_tags(draft, known_tags)},
             PROJECT_CAPTURED_PROPERTY: _date(captured_on),
             PROJECT_SUMMARY_PROPERTY: _rich_text(draft.summary),
         }
-        if draft.source_url:
-            properties[PROJECT_SOURCE_PROPERTY] = {"url": draft.source_url}
+        if source_url:
+            properties[PROJECT_SOURCE_PROPERTY] = {"url": source_url}
 
         # No "template" here: Notion rejects a page that sends both a template
         # and children, and the body we build is the point of the page.
@@ -227,6 +241,28 @@ class NotionWriter:
             "template": {"type": "default"},
             "properties": properties,
         }
+
+    async def list_tag_options(self) -> list[str]:
+        """The Tags values the workspace already uses.
+
+        Fed to the drafting prompt so the agent reuses an existing tag instead
+        of minting a near-duplicate; the vocabulary had already split into
+        "agent evaluation"/"agent-evaluation" and two more such pairs.
+        """
+        try:
+            async with self._session() as client:
+                schema = await self._database_schema(
+                    client,
+                    self.projects_database_id,
+                )
+        except Exception:
+            # A vocabulary hint is a nicety; never block a capture on it.
+            logger.warning("Could not read the existing Notion tag vocabulary.")
+            return []
+
+        definition = schema.get(PROJECT_TAGS_PROPERTY) or {}
+        options = (definition.get("multi_select") or {}).get("options") or []
+        return [str(option["name"]) for option in options if option.get("name")]
 
     async def find_project_by_source(self, source_url: str) -> ExistingProject | None:
         """Look for a project already saved from this URL.
@@ -272,6 +308,7 @@ class NotionWriter:
         *,
         project_id: str,
         draft: ProjectDraft,
+        grounding: DraftGrounding | None = None,
     ) -> list[str]:
         """Attach this draft's tasks to a project that already exists."""
         async with self._session() as client:
@@ -283,7 +320,7 @@ class NotionWriter:
                         task_name=task_name,
                         priority=draft.priority,
                         project_id=project_id,
-                        source_url=draft.source_url,
+                        source_url=commit_source_url(draft, grounding),
                     ),
                 )
                 for task_name in draft.tasks
@@ -412,6 +449,24 @@ class NotionWriter:
             )["properties"]
         )
 
+        skipped_project = sorted(
+            (wanted_project - project_properties) & OPTIONAL_PROJECT_PROPERTIES
+        )
+        degraded = sorted(
+            {
+                PROPERTY_CAPABILITIES[name]
+                for name in skipped_project
+                if name in PROPERTY_CAPABILITIES
+            }
+        )
+        if degraded:
+            # A blank column is cosmetic; a disabled capability is not.
+            logger.warning(
+                "Notion schema gaps have disabled: %s. Missing properties: %s.",
+                ", ".join(degraded),
+                ", ".join(skipped_project),
+            )
+
         return NotionSchemaReport(
             missing_project_properties=sorted(
                 (wanted_project - project_properties) - OPTIONAL_PROJECT_PROPERTIES
@@ -419,9 +474,8 @@ class NotionWriter:
             missing_task_properties=sorted(
                 (wanted_task - task_properties) - OPTIONAL_TASK_PROPERTIES
             ),
-            skipped_project_properties=sorted(
-                (wanted_project - project_properties) & OPTIONAL_PROJECT_PROPERTIES
-            ),
+            skipped_project_properties=skipped_project,
+            degraded_capabilities=degraded,
         )
 
     async def _database_properties(
@@ -429,13 +483,30 @@ class NotionWriter:
         client: httpx.AsyncClient,
         database_id: str,
     ) -> set[str]:
+        return set(await self._database_schema(client, database_id))
+
+    async def _database_schema(
+        self,
+        client: httpx.AsyncClient,
+        database_id: str,
+    ) -> dict[str, Any]:
+        """The database's property definitions, fetched once per writer.
+
+        Both the schema check and the tag vocabulary need this payload, and a
+        commit should not pay for the same GET twice.
+        """
+        if database_id in self._schema_cache:
+            return self._schema_cache[database_id]
+
         response = await client.get(
             f"{NOTION_API_BASE_URL}/databases/{database_id}",
             headers=self._headers(),
         )
         _raise_for_notion_error(response)
         properties = response.json().get("properties", {})
-        return set(properties) if isinstance(properties, dict) else set()
+        schema = properties if isinstance(properties, dict) else {}
+        self._schema_cache[database_id] = schema
+        return schema
 
     @asynccontextmanager
     async def _session(self) -> AsyncIterator[httpx.AsyncClient]:
@@ -465,6 +536,21 @@ class NotionWriter:
             "Content-Type": "application/json",
             "Notion-Version": self.api_version,
         }
+
+
+def commit_source_url(
+    draft: ProjectDraft,
+    grounding: DraftGrounding | None = None,
+) -> str | None:
+    """The URL to store, preferring the canonical one.
+
+    find_project_by_source already *looks up* by canonical_url, so storing the
+    raw source_url means a re-capture of the same page through a different
+    tracking link never matches its own earlier row.
+    """
+    if grounding is not None and grounding.canonical_url:
+        return grounding.canonical_url
+    return draft.source_url
 
 
 def build_project_children(
@@ -611,14 +697,19 @@ def _status(value: str) -> dict[str, Any]:
     return {"status": {"name": value}}
 
 
-def _draft_tags(draft: ProjectDraft) -> list[dict[str, str]]:
+def _draft_tags(
+    draft: ProjectDraft,
+    known_tags: list[str] | None = None,
+) -> list[dict[str, str]]:
     """Tags carry topics now that Type and Intent are their own properties.
 
     Drafts written before topics existed fall back to the old behaviour so
     their tags do not come out empty.
     """
     if draft.topics:
-        return [{"name": topic} for topic in _normalized_topics(draft.topics)]
+        return [
+            {"name": topic} for topic in _normalized_topics(draft.topics, known_tags)
+        ]
 
     tags: list[str] = []
     tags.append(draft.project_type)
@@ -626,15 +717,38 @@ def _draft_tags(draft: ProjectDraft) -> list[dict[str, str]]:
     return [{"name": tag} for tag in tags]
 
 
-def _normalized_topics(topics: list[str]) -> list[str]:
-    """Lowercase, de-duplicated, and free of the commas Notion splits on."""
+def _normalized_topics(
+    topics: list[str],
+    known_tags: list[str] | None = None,
+) -> list[str]:
+    """Lowercase, de-duplicated, and free of the commas Notion splits on.
+
+    A topic that matches an existing tag once hyphens, case and a trailing
+    plural are folded away is rewritten to that tag's exact spelling, so
+    "agent-evaluation" stops becoming a second option beside "agent
+    evaluation". Existing tags are never rewritten, only matched against.
+    """
+    existing = {_tag_key(tag): tag for tag in reversed(known_tags or [])}
+
     seen: list[str] = []
     for topic in topics:
         cleaned = topic.strip().lower().replace(",", " ")
         cleaned = " ".join(cleaned.split())
-        if cleaned and cleaned not in seen:
+        if not cleaned:
+            continue
+        cleaned = existing.get(_tag_key(cleaned), cleaned)
+        if cleaned not in seen:
             seen.append(cleaned)
     return seen[:3]
+
+
+def _tag_key(tag: str) -> str:
+    """Fold spelling differences that should not create a second tag."""
+    folded = re.sub(r"[^a-z0-9]+", " ", tag.casefold()).strip()
+    return " ".join(
+        word[:-1] if len(word) > 3 and word.endswith("s") else word
+        for word in folded.split()
+    )
 
 
 class NotionApiError(RuntimeError):

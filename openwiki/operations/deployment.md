@@ -106,7 +106,7 @@ The secret JSON should contain all keys from `.env.example` (e.g. `AGENT__OPENAI
 
 `.github/workflows/release.yml` owns the release lifecycle. On every push to `main`, [release-please](https://github.com/googleapis/release-please) maintains a standing release PR that bumps `pyproject.toml` and writes `CHANGELOG.md` from conventional commits. Merging that PR cuts a tag and GitHub release, which triggers CI as a reusable workflow gate and then deploys:
 
-1. **release-please** — creates/updates the release PR. Configured via `release-please-config.json` (release type `python`, `include-v-in-tags`, `include-component-in-tag: false` so tags are `v0.3.0` not `backlog-tamer-v0.3.0`, bootstrap SHA `8712113`). Version tracked in `.release-please-manifest.json` (currently `0.3.0`).
+1. **release-please** — creates/updates the release PR. Configured via `release-please-config.json` (release type `python`, `include-v-in-tags`, `include-component-in-tag: false` so tags are `v0.5.0` not `backlog-tamer-v0.5.0`, bootstrap SHA `8712113`). Version tracked in `.release-please-manifest.json` (currently `0.5.0`).
 2. **relock** — re-runs `uv lock` on the release PR branch to keep `uv.lock` in sync with the version bump (release-please force-pushes the branch, so this commit is ephemeral and re-applied each run).
 3. **CI** — re-runs the full CI suite against the release commit as a synchronous gate.
 4. **Deploy** — invoked as a reusable `workflow_call` with the release tag as `version` input.
@@ -123,7 +123,7 @@ The secret JSON should contain all keys from `.env.example` (e.g. `AGENT__OPENAI
 6. If the image is missing, build and push to ECR tagged with both `$VERSION` and `sha-$GITHUB_SHA`.
 7. `terraform apply -auto-approve` with `image_tag=$VERSION`.
 8. **Post-deploy smoke tests:**
-   - **Worker healthcheck** — invokes the worker Lambda with `{"healthcheck": true}`, which eagerly imports agent and Notion modules, checks for missing extraction dependencies (`beautifulsoup4`, `pypdf`), and asserts the deployed version matches the release tag. See [Telegram and Notion Integrations](../integrations/telegram-and-notion.md) for the healthcheck implementation.
+   - **Worker healthcheck** — invokes the worker Lambda with `{"healthcheck": true}`, which eagerly imports agent and Notion modules, checks for missing extraction dependencies (`beautifulsoup4`, `pypdf`), asserts the deployed version matches the release tag, and reports `skipped_notion_properties` plus `degraded_capabilities` (a missing `Source` column surfaces as `["duplicate-detection"]`). See [Telegram and Notion Integrations](../integrations/telegram-and-notion.md) for the healthcheck implementation.
    - **Webhook auth rejection** — sends an unsigned request to the webhook Lambda and asserts a `403` response. A `503` would mean `TELEGRAM__WEBHOOK_SECRET` is not configured (the handler now fails closed); a `200` would mean the webhook is accepting requests without validation.
 
 Terraform outputs `webhook_function_name` and `worker_function_name` for the smoke tests.
@@ -173,4 +173,4 @@ After deployment, register the Telegram webhook to the Lambda Function URL (outp
 | `infra/terraform/outputs.tf` | Terraform outputs |
 | `scripts/build_and_push_image.sh` | Manual image build/push |
 | `src/backlog_tamer/integrations/telegram/lambda_handlers.py` | Lambda handlers and secret loading |
-_tamer/integrations/telegram/lambda_handlers.py` | Lambda handlers and secret loading |
+| `scripts/migrate_notion_schema.py` | One-time Notion schema migration (add optional columns + backfill) |

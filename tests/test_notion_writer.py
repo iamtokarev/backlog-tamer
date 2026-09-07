@@ -704,3 +704,99 @@ def test_notion_error_message_reaches_the_caller():
 
     assert "Tags is expected to be multi_select." in str(failure.value)
     assert "400" in str(failure.value)
+
+
+class TagVocabularyClient(FakeClient):
+    """A projects database whose Tags column already has options."""
+
+    def __init__(self, tag_names: list[str]):
+        super().__init__()
+        self.tag_names = tag_names
+
+    async def get(self, url: str, *, headers) -> FakeResponse:
+        self.gets.append(url)
+        if "projects-db" not in url:
+            return FakeResponse(
+                {"properties": {name: {} for name in self.task_properties}}
+            )
+        properties: dict[str, Any] = {
+            name: {} for name in self.project_properties if name != "Tags"
+        }
+        properties["Tags"] = {
+            "multi_select": {"options": [{"name": name} for name in self.tag_names]}
+        }
+        return FakeResponse({"properties": properties})
+
+
+def test_a_topic_folds_onto_the_tag_spelling_already_in_use():
+    """Hyphen-vs-space variants were splitting the vocabulary in two."""
+    client = TagVocabularyClient(["agent evaluation", "llm-agents"])
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+        client=client,
+    )
+    draft = ProjectDraft(
+        project_name="ACES: evaluate agent skills continuously",
+        short_name="ACES",
+        summary="Continuous evaluation for reusable agent skills.",
+        project_type="paper",
+        intent="learn",
+        priority="Medium",
+        topics=["Agent-Evaluation", "LLM agents", "benchmarking"],
+        tasks=["Read: ACES"],
+    )
+
+    asyncio.run(writer.create_project_with_tasks(draft))
+
+    project_payload = client.posts[0][1]
+    tags = [
+        tag["name"] for tag in project_payload["properties"]["Tags"]["multi_select"]
+    ]
+    assert tags == ["agent evaluation", "llm-agents", "benchmarking"]
+
+
+def test_source_stores_the_canonical_url_so_a_recapture_can_match_it():
+    from backlog_tamer.agents.intake_triage.schemas import DraftGrounding
+
+    draft = ProjectDraft(
+        project_name="LangChain Deep Agents: build long-running AI agents",
+        short_name="LangChain Deep Agents",
+        summary="Course on long-running agents.",
+        project_type="course",
+        intent="learn",
+        priority="Medium",
+        source_url="https://academy.langchain.com/courses/deepagents?_gl=1*174rmm0",
+        tasks=["Work through: LangChain Deep Agents"],
+    )
+    grounding = DraftGrounding(
+        fetch_status="success",
+        canonical_url="https://academy.langchain.com/courses/deepagents",
+    )
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+    )
+
+    payload = writer.build_project_payload(draft, grounding=grounding)
+
+    assert payload["properties"]["Source"] == {
+        "url": "https://academy.langchain.com/courses/deepagents"
+    }
+
+
+def test_schema_report_names_the_capability_a_missing_source_column_disables():
+    client = FakeClient(project_properties=ALL_PROJECT_PROPERTIES - {"Source"})
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+        client=client,
+    )
+
+    report = asyncio.run(writer.describe_schema())
+
+    assert report.skipped_project_properties == ["Source"]
+    assert report.degraded_capabilities == ["duplicate-detection"]

@@ -41,6 +41,9 @@ REVISION_PLACEHOLDER = "What should change?"
 
 PROJECT_TYPE_ICONS = {
     "paper": "🧪",
+    "article": "📰",
+    "video": "🎬",
+    "course": "🎓",
     "repository": "📦",
     "product": "🧩",
     "company": "🏢",

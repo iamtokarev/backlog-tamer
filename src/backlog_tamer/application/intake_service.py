@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -12,6 +14,7 @@ from backlog_tamer.agents.intake_triage.schemas import (
     IncomingContext,
     ProjectDraft,
 )
+from backlog_tamer.agents.intake_triage.task_names import with_composed_task_names
 from backlog_tamer.agents.intake_triage.workflow import (
     build_triage_message,
     build_triage_state_delta,
@@ -21,7 +24,14 @@ from backlog_tamer.integrations.notion import NotionWriter
 
 from .confirmation_store import ConfirmationStore, utc_now
 from .database_urls import async_engine_options, to_adk_session_database_url
-from .models import ConfirmationRecord, ConfirmationStatus, IntakeResult
+from .models import (
+    ConfirmationRecord,
+    ConfirmationStatus,
+    IntakeResult,
+    ManualEdit,
+)
+
+logger = logging.getLogger(__name__)
 
 APP_NAME = "backlog_tamer"
 REQUEST_INPUT_TOOL_NAME = "adk_request_input"
@@ -53,7 +63,7 @@ def _match_fetched_entry(
     return next(iter(fetched.values()), None)
 
 
-def _with_manual_edits(review_reply: str, manual_edits: dict[str, str]) -> str:
+def _with_manual_edits(review_reply: str, manual_edits: dict[str, ManualEdit]) -> str:
     """Tell the agent which fields the user already fixed with the buttons.
 
     Quick edits patch the stored draft only; the workflow session still holds
@@ -63,10 +73,35 @@ def _with_manual_edits(review_reply: str, manual_edits: dict[str, str]) -> str:
     if not manual_edits or review_reply in {"approve", "reject"}:
         return review_reply
 
-    applied = ", ".join(f"{field}={value}" for field, value in manual_edits.items())
+    applied = ", ".join(f"{field}={edit.after}" for field, edit in manual_edits.items())
     return (
         f"I already corrected these fields myself, keep them exactly as they are: "
         f"{applied}.\n\n{review_reply}"
+    )
+
+
+def _log_corrections(confirmation: ConfirmationRecord) -> None:
+    """Record which fields the agent got wrong, at the moment they stick.
+
+    A quick edit runs no model and emits no trace, so without this the only
+    surviving evidence of a correction is the committed value itself. One
+    structured line per approval turns the buttons back into a measurable
+    per-field accuracy signal.
+    """
+    corrections = confirmation.corrected_fields
+    if not corrections:
+        return
+
+    logger.info(
+        "intake_correction confirmation_id=%s corrected=%s",
+        confirmation.confirmation_id,
+        json.dumps(
+            {
+                field: {"agent": edit.before, "user": edit.after}
+                for field, edit in corrections.items()
+            },
+            sort_keys=True,
+        ),
     )
 
 
@@ -110,11 +145,12 @@ class IntakeService:
             session_id=session_id,
         )
 
+        known_topics = await self._known_topics()
         events = await self._run_turn(
             user_id=user_id,
             session_id=session_id,
-            message=build_triage_message(context),
-            state_delta=build_triage_state_delta(context),
+            message=build_triage_message(context, known_topics),
+            state_delta=build_triage_state_delta(context, known_topics),
         )
 
         session_state = await self._get_session_state(
@@ -245,6 +281,8 @@ class IntakeService:
                 notion_project_url=confirmation.notion_project_url,
             )
 
+        _log_corrections(confirmation)
+
         writer = self.notion_writer or NotionWriter.from_settings(self.settings)
 
         duplicate = await self._find_duplicate(writer, confirmation)
@@ -339,6 +377,7 @@ class IntakeService:
         task_ids = await writer.add_tasks_to_project(
             project_id=confirmation.notion_project_id,
             draft=confirmation.draft_proposal,
+            grounding=confirmation.grounding,
         )
         self.store.mark_committed(
             confirmation_id=confirmation_id,
@@ -401,6 +440,19 @@ class IntakeService:
             )
         return dict(session.state)
 
+    async def _known_topics(self) -> list[str]:
+        """The tag vocabulary already in Notion, for the drafting prompt.
+
+        Never fatal: a capture must still work when Notion is unreachable or
+        not configured at all.
+        """
+        try:
+            writer = self.notion_writer or NotionWriter.from_settings(self.settings)
+            return await writer.list_tag_options()
+        except Exception:
+            logger.warning("Could not load the existing topic vocabulary.")
+            return []
+
     def _extract_grounding(
         self,
         session_state: dict[str, Any],
@@ -448,7 +500,9 @@ class IntakeService:
         draft_payload = session_state.get("draft_proposal")
         if draft_payload is None:
             return None
-        return ProjectDraft.model_validate(draft_payload)
+        # Name the default task after its subject before anyone sees the
+        # draft, so the review card, Telegram and Notion all agree.
+        return with_composed_task_names(ProjectDraft.model_validate(draft_payload))
 
     def _extract_request_input(self, events: list[Any]) -> dict[str, str]:
         interrupt = self._try_extract_request_input(events)
