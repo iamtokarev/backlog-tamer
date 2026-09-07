@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.5.0...v0.6.0) (2026-09-07)
+
+
+### Features
+
+* fix backlog categorization from taxonomy to correction signal ([e5ca04f](https://github.com/iamtokarev/backlog-tamer/commit/e5ca04fb5d4aaf3190325b697e7e5f326e978405))
+* **notion:** add the columns the writer was dropping, and backfill them ([6daee86](https://github.com/iamtokarev/backlog-tamer/commit/6daee86b2b5386d863107ff2346977e55f94a0fc))
+
+
+### Documentation
+
+* update openwikii docs ([b3243f3](https://github.com/iamtokarev/backlog-tamer/commit/b3243f308c676bff6451a76f9b2ed091bec44f9d))
+
 ## [0.5.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.4.2...v0.5.0) (2026-08-17)
 
 
