@@ -29,7 +29,7 @@ All three entry points build the same `python-telegram-bot` `Application` via `b
 
 1. Eagerly imports the agent (`agent`, `workflow`), Notion (`writer`), and fetch_url modules — these are otherwise only loaded on the first real message, so a broken image would surface as a failed user message instead of a failed deploy.
 2. Calls `fetch_url.missing_optional_dependencies()` to check that `beautifulsoup4` and `pypdf` are installed. Both loaders swallow `ImportError` and fall back silently, so a missing dependency degrades output quality without ever raising. The healthcheck surfaces this.
-3. Reads the installed package version via `importlib.metadata.version("backlog-tamer")` and returns `{"ok": true, "version": "..."}`. The deploy workflow asserts this matches the release tag.
+3. Reads the installed package version via `importlib.metadata.version("backlog-tamer")` and returns `{"ok": true, "version": "...", "skipped_notion_properties": [...], "degraded_capabilities": [...]}`. The deploy workflow asserts the version matches the release tag. `degraded_capabilities` surfaces schema gaps that disable a feature rather than just blanking a field — currently a missing `Source` column disables `"duplicate-detection"`. `skipped_notion_properties` lists optional columns the workspace has not added yet.
 
 ### Handler Logic
 
@@ -115,19 +115,21 @@ Unsupported or unauthorized updates return 200 "ignored" (not an error). Invalid
 **Additional methods:**
 
 - `find_project_by_source(source_url)` — queries the projects database for an existing page with the same Source URL, for duplicate detection. Never blocks the commit on failure.
-- `add_tasks_to_project(project_id, draft)` — attaches tasks to an existing project (used when a duplicate is found and the user chooses "Add task there").
+- `list_tag_options()` — reads the Tags column's `multi_select` options from the projects database and returns the existing tag spellings. Fed into the drafting prompt via `IntakeService._known_topics()` so the agent reuses an existing tag instead of minting a near-duplicate (e.g. `"agent-evaluation"` beside `"agent evaluation"`). Best-effort: returns `[]` on any error so a capture is never blocked.
+- `add_tasks_to_project(project_id, draft, grounding=None)` — attaches tasks to an existing project (used when a duplicate is found and the user chooses "Add task there"). Uses `commit_source_url` for task source URLs.
 - `archive_pages(page_ids)` — archives (not deletes) project and task pages, used by the undo flow.
-- `describe_schema()` — compares the writer's expected properties against what the databases actually have, returning a `NotionSchemaReport` with missing and skipped properties. Called from the healthcheck.
+- `describe_schema()` — compares the writer's expected properties against what the databases actually have, returning a `NotionSchemaReport` with `missing_project_properties`, `missing_task_properties`, `skipped_project_properties`, and `degraded_capabilities`. Called from the healthcheck. `degraded_capabilities` maps a missing optional column to the feature it turns off — currently `{PROJECT_SOURCE_PROPERTY: "duplicate-detection"}`. A workspace that still has the legacy `"Type"` column is treated as having `Project type` (the probe adds `PROJECT_TYPE_PROPERTY` to the known set), so the healthcheck does not false-positive after a rename.
 
 **Key design choices:**
 
 - One `httpx.AsyncClient` per commit session (shared across all page POSTs in a commit) via the `_session()` context manager. 20-second timeout. Accepts an optional injected client for testing.
 - Project pages do **not** send `template: {type: "default"}` — Notion rejects a page that sends both a template and children blocks. Task pages still use the default template.
 - Project page body (`build_project_children`) includes: a bookmark block for the source URL, a "Why I saved this" heading with the user's note, "Key points" from grounding, "Next action" to-do blocks for tasks, and a provenance callout.
-- Icon is set from a `project_type` → emoji mapping (`paper` 🧪, `repository` 📦, `product` 🧩, `company` 🏢, `model` 🧠, `tool` 🛠️).
-- Tags come from `draft.topics`; drafts without topics fall back to `draft.project_type` and `draft.intent`.
+- Icon is set from a `project_type` → emoji mapping (`paper` 🧪, `article` 📰, `video` 🎬, `course` 🎓, `repository` 📦, `product` 🧩, `company` 🏢, `model` 🧠, `tool` 🛠️).
+- Tags come from `draft.topics`, folded onto existing tag spellings via `_normalized_topics` + `_tag_key` (ignores hyphens, case, and trailing plurals; existing tags are matched against, never rewritten). Drafts without topics fall back to `draft.project_type` and `draft.intent`.
+- `commit_source_url(draft, grounding)` prefers `grounding.canonical_url` over `draft.source_url` for both project and task Source properties, so duplicate detection (which looks up by canonical URL) can match a re-capture of the same page.
 - Task due dates: High = +3 days, Medium = +14 days, Low = no due date.
-- `_fit_to_schema` probes each database's properties and drops any optional properties the database does not have, so a workspace that has not added new columns still gets a usable page.
+- `_fit_to_schema` probes each database's properties and drops any optional properties the database does not have, so a workspace that has not added new columns still gets a usable page. The property definitions are fetched once per writer and cached in `_schema_cache` (shared by the schema check, `list_tag_options`, and `_fit_to_schema`).
 - Optional project properties: Source, Project type, Intent, Captured. Optional task properties: Due, Source. When the database still has the legacy `"Type"` column, `_fit_to_schema` renames `Project type` to `Type` on the fly.
 
 ### Notion Configuration
@@ -143,6 +145,22 @@ Required env vars (see `.env.example`):
 
 The Notion projects database must have properties named: `Project name`, `Status`, `Priority`, `Tags`, `Summary`. Optional (silently skipped if missing): `Source`, `Project type` (or legacy `Type`), `Intent`, `Captured`. The tasks database must have: `Task name`, `Status`, `Priority`, `Projects`. Optional: `Due`, `Source`.
 
+### Schema Migration Script
+
+`scripts/migrate_notion_schema.py` is a one-time operational script that adds the optional columns the writer had been silently dropping (`Project type`, `Intent`, `Source`, `Captured` on projects; `Source` on tasks) and backfills them for existing pages. `_fit_to_schema` discards properties a database does not have, so these columns were dropped on every commit — and `find_project_by_source` could never match, which left duplicate detection permanently off.
+
+- **Dry-run is the default.** `--apply` writes; a dry run prints what would change.
+- **Additive only.** It adds columns and fills them where empty. It never edits `Tags`, `Summary`, `Status`, `Priority`, names, page bodies, or relations.
+- **Backfill sources:** `Source` from the bookmark block the writer already places at the top of each page body (falling back to a URL in `Summary`), `Captured` from `created_time`, and `Project type`/`Intent` from the legacy values still sitting in `Tags` (`LEGACY_TAG_TO_PROJECT_TYPE` / `LEGACY_TAG_TO_INTENT`). URLs are canonicalized via `strip_tracking_params` from `fetch_url`.
+- **Snapshot first.** With `--apply`, every page is snapshotted to `notion-projects-snapshot-<timestamp>.json` before any write. Snapshots are git-ignored (`.gitignore`).
+
+Run from the repo root with `NOTION_TOKEN`, `NOTION_PROJECTS_DATABASE_ID`, and `NOTION_TASKS_DATABASE_ID` configured:
+
+```sh
+uv run python scripts/migrate_notion_schema.py            # dry run
+uv run python scripts/migrate_notion_schema.py --apply     # add columns + backfill
+```
+
 ## Source References
 
 | File | Purpose |
@@ -156,4 +174,5 @@ The Notion projects database must have properties named: `Project name`, `Status
 | `src/backlog_tamer/integrations/telegram/rendering.py` | HTML rendering, inline keyboards, picker keyboards, terminal keyboards |
 | `src/backlog_tamer/integrations/telegram/state.py` | `TelegramStateStore` (revision tracking, update dedup) |
 | `src/backlog_tamer/integrations/notion/writer.py` | `NotionWriter` |
-| `src/backlog_tamer/agents/intake_triage/tools/fetch_url.py` | `missing_optional_dependencies()` used by Lambda healthcheck |
+| `src/backlog_tamer/agents/intake_triage/tools/fetch_url.py` | `missing_optional_dependencies()` used by Lambda healthcheck; `strip_tracking_params` reused by the migration script |
+| `scripts/migrate_notion_schema.py` | One-time Notion schema migration: add optional columns and backfill them |
