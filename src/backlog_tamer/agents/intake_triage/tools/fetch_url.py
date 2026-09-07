@@ -9,7 +9,7 @@ from functools import lru_cache
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from io import BytesIO
 from typing import Final
-from urllib.parse import urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from google.adk.tools import ToolContext
 
@@ -28,6 +28,38 @@ USER_AGENT: Final[str] = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/135.0.0.0 Safari/537.36"
 )
+# Query parameters that identify a campaign, not a page. Leaving them in
+# means the same page saved from two emails is stored under two URLs, so the
+# duplicate check can never match its own earlier row.
+TRACKING_PARAM_PREFIXES: Final[tuple[str, ...]] = ("utm_", "_ga", "mc_", "pk_")
+TRACKING_PARAMS: Final[frozenset[str]] = frozenset(
+    {
+        "_gl",
+        "fbclid",
+        "gclid",
+        "dclid",
+        "msclkid",
+        "igshid",
+        "si",
+        "ref",
+        "ref_src",
+        "spm",
+        "yclid",
+    }
+)
+
+# Navigation and call-to-action text that survives extraction but says
+# nothing about the page: "Add us as a preferred source on Google" was a
+# key point on a real capture.
+BOILERPLATE_RE: Final[re.Pattern[str]] = re.compile(
+    r"(subscribe|newsletter|sign (in|up)|log in|create an account|"
+    r"preferred source|join the discussion|follow us|share (this|on)|"
+    r"cookie|privacy policy|terms of (service|use)|to your inbox|"
+    r"\b\w+ citing this paper\b|welcome to the course|"
+    r"read more|learn more|get started for free|download the app)",
+    re.IGNORECASE,
+)
+
 SKIP_TEXT_RE: Final[re.Pattern[str]] = re.compile(
     r"^(menu|search|share|home|skip to content|sign in|log in|subscribe|"
     r"privacy policy|terms of service|accept all|cookie settings|open app)$",
@@ -637,9 +669,30 @@ def _normalize_url_syntax(url: str) -> str:
         scheme=parsed.scheme.lower(),
         netloc=parsed.netloc,
         path=path,
+        query=strip_tracking_params(parsed.query),
         fragment="",
     )
     return urlunparse(normalized)
+
+
+def strip_tracking_params(query: str) -> str:
+    """Drop campaign parameters, keeping the ones that select content."""
+    if not query:
+        return query
+
+    kept = [
+        (name, value)
+        for name, value in parse_qsl(query, keep_blank_values=True)
+        if not _is_tracking_param(name)
+    ]
+    return urlencode(kept)
+
+
+def _is_tracking_param(name: str) -> bool:
+    lowered = name.lower()
+    if lowered in TRACKING_PARAMS:
+        return True
+    return lowered.startswith(TRACKING_PARAM_PREFIXES)
 
 
 def _is_x_status_url(parsed_url) -> bool:
@@ -847,6 +900,8 @@ def _build_key_points(
     for candidate in candidates:
         cleaned = _clean_text(candidate)
         if not cleaned or len(cleaned) < 20:
+            continue
+        if BOILERPLATE_RE.search(cleaned):
             continue
         if len(cleaned) > 220:
             cleaned = cleaned[:217].rstrip() + "..."

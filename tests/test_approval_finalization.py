@@ -32,7 +32,13 @@ class FakeNotionWriter:
     async def archive_pages(self, page_ids: list[str]) -> None:
         self.archived.extend(page_ids)
 
-    async def add_tasks_to_project(self, *, project_id: str, draft: ProjectDraft):
+    async def add_tasks_to_project(
+        self,
+        *,
+        project_id: str,
+        draft: ProjectDraft,
+        grounding: DraftGrounding | None = None,
+    ):
         self.added_task_project_ids.append(project_id)
         return ["new-task-id"]
 

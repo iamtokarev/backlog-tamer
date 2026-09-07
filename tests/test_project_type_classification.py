@@ -9,6 +9,9 @@ from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
 
 PROJECT_TYPES = [
     "paper",
+    "article",
+    "video",
+    "course",
     "repository",
     "product",
     "company",
@@ -63,12 +66,37 @@ def test_classifier_prompt_keeps_project_focused_regression_cases(
 
 
 @pytest.mark.parametrize(
+    ("target", "expected_guidance"),
+    [
+        (
+            "a course hosted by the vendor whose tool it teaches",
+            'A course is "course" even when it teaches a specific tool',
+        ),
+        (
+            "a news article covering a product launch",
+            'about NVIDIA PAIR is "product"',
+        ),
+    ],
+)
+def test_study_material_has_its_own_vocabulary(
+    target: str,
+    expected_guidance: str,
+):
+    """Two courses in one week were classified "tool" for want of a value."""
+    assert target
+    assert expected_guidance in INTAKE_TRIAGE_INSTRUCTIONS
+
+
+@pytest.mark.parametrize(
     ("legacy_type", "project_type"),
     [
         ("paper", "paper"),
         ("repository", "repository"),
         ("documentation", "tool"),
-        ("article", "product"),
+        ("article", "article"),
+        ("video", "video"),
+        ("course", "course"),
+        ("idea", "product"),
     ],
 )
 def test_persisted_resource_type_drafts_are_migrated_on_load(

@@ -15,7 +15,7 @@ from backlog_tamer.agents.intake_triage.schemas import (
 )
 
 from .database_urls import to_sync_database_url, uses_external_pooler
-from .models import ConfirmationRecord, ConfirmationStatus
+from .models import ConfirmationRecord, ConfirmationStatus, ManualEdit
 
 
 def utc_now() -> datetime:
@@ -117,13 +117,19 @@ class ConfirmationStore:
                 )
 
             draft = ProjectDraft.model_validate_json(row.draft_proposal_json)
+            previous_value = str(getattr(draft, field))
             updated = ProjectDraft.model_validate({**draft.model_dump(), field: value})
             normalized_value = str(getattr(updated, field))
             row.draft_proposal_json = updated.model_dump_json()
-            row.manual_edits_json = json.dumps(
+
+            existing = _load_manual_edits(row.manual_edits_json)
+            # Keep the agent's original answer across repeated taps on the
+            # same field, so "before" stays what the agent proposed.
+            original = existing[field].before if field in existing else previous_value
+            row.manual_edits_json = _dump_manual_edits(
                 {
-                    **_load_manual_edits(row.manual_edits_json),
-                    field: normalized_value,
+                    **existing,
+                    field: ManualEdit(before=original, after=normalized_value),
                 }
             )
             row.updated_at = utc_now()
@@ -343,7 +349,7 @@ def _load_grounding(raw: str | None) -> DraftGrounding:
         return DraftGrounding()
 
 
-def _load_manual_edits(raw: str | None) -> dict[str, str]:
+def _load_manual_edits(raw: str | None) -> dict[str, ManualEdit]:
     if not raw:
         return {}
     try:
@@ -352,11 +358,30 @@ def _load_manual_edits(raw: str | None) -> dict[str, str]:
         return {}
     if not isinstance(parsed, dict):
         return {}
-    edits = {str(key): str(value) for key, value in parsed.items()}
+
+    edits: dict[str, ManualEdit] = {}
+    for key, value in parsed.items():
+        try:
+            edits[str(key)] = ManualEdit.coerce(value)
+        except (TypeError, ValueError):
+            continue
+
     legacy_type = edits.pop("resource_type", None)
     if legacy_type is not None and "project_type" not in edits:
-        edits["project_type"] = LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE.get(
-            legacy_type,
-            legacy_type,
+        edits["project_type"] = legacy_type.model_copy(
+            update={
+                "before": _migrated_project_type(legacy_type.before),
+                "after": _migrated_project_type(legacy_type.after),
+            }
         )
     return edits
+
+
+def _migrated_project_type(value: str) -> str:
+    if not value:
+        return value
+    return LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE.get(value, value)
+
+
+def _dump_manual_edits(edits: dict[str, ManualEdit]) -> str:
+    return json.dumps({field: edit.model_dump() for field, edit in edits.items()})

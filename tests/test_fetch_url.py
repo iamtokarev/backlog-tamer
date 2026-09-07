@@ -145,3 +145,55 @@ def test_redirect_to_private_address_is_rejected_before_second_request(monkeypat
         fetch_url._request_public_url("http://public.test/start")
 
     assert requested_addresses == [PUBLIC_IP]
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # The real capture that stored a course under an un-matchable URL.
+        (
+            "https://academy.langchain.com/courses/deepagents?_gl=1*174rmm0*_ga*NTY",
+            "https://academy.langchain.com/courses/deepagents",
+        ),
+        (
+            "https://huggingface.co/papers/2609.02749?utm_source=digest&utm_medium=email",
+            "https://huggingface.co/papers/2609.02749",
+        ),
+        # Parameters that select content are not campaign noise.
+        (
+            "https://www.youtube.com/watch?v=abc123&si=xyz",
+            "https://www.youtube.com/watch?v=abc123",
+        ),
+        (
+            "https://example.com/search?q=agents&page=2",
+            "https://example.com/search?q=agents&page=2",
+        ),
+    ],
+)
+def test_tracking_parameters_are_stripped_from_the_normalized_url(
+    url: str,
+    expected: str,
+):
+    assert fetch_url._normalize_url_syntax(url) == expected
+
+
+def test_key_points_drop_page_furniture():
+    """Real key points from last week's captures were nav and CTA text."""
+    key_points = fetch_url._build_key_points(
+        description="Add us as a preferred source on Google",
+        headings=[
+            "Join the discussion on this paper page",
+            "Models citing this paper 0",
+            "Repo-To-Skill: Distilling GitHub Repositories Into AI4AI Skills",
+        ],
+        lines=[
+            "Subscribe to our newsletter for weekly updates",
+            "AI coding strategies that work delivered to your inbox.",
+            "DisCo distills operational knowledge into reusable agent skills.",
+        ],
+    )
+
+    assert key_points == [
+        "Repo-To-Skill: Distilling GitHub Repositories Into AI4AI Skills",
+        "DisCo distills operational knowledge into reusable agent skills.",
+    ]
