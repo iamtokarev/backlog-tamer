@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/iamtokarev/backlog-tamer/compare/v0.6.0...v0.6.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **deps:** patch known vulnerabilities in dependencies ([c5daca1](https://github.com/iamtokarev/backlog-tamer/commit/c5daca1a26743ff52532df59676ce329b9c3310e))
+* **deps:** patch known vulnerabilities in dependencies ([697b987](https://github.com/iamtokarev/backlog-tamer/commit/697b987a2707ea943a18a8501e696a4582960481))
+
 ## [0.6.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.5.0...v0.6.0) (2026-09-07)
 
 
