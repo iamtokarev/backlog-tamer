@@ -1,6 +1,6 @@
 FROM public.ecr.aws/lambda/python:3.12
 
-COPY --from=ghcr.io/astral-sh/uv:0.9.17 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.33 /uv /uvx /bin/
 
 WORKDIR /var/task
 
