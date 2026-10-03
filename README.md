@@ -20,11 +20,11 @@ Model requests use OpenRouter through ADK's LiteLLM adapter:
 
 ```dotenv
 OPENROUTER_API_KEY=your-openrouter-key
-AGENT__MODEL=openai/gpt-5.6-luna
+AGENT__MODEL=openai/gpt-6-luna
 AGENT__REASONING_EFFORT=medium
 ```
 
-The model and reasoning settings above are the defaults. `AGENT__MODEL` takes an OpenRouter model slug including its publisher, such as `openai/gpt-5.6-luna`; the adapter adds the `openrouter/` transport prefix. Select a model that supports function tools, structured output, and the configured reasoning effort (`none`, `low`, `medium`, or `high`).
+The model and reasoning settings above are the defaults. `AGENT__MODEL` takes an OpenRouter model slug including its publisher, such as `openai/gpt-6-luna`; the adapter adds the `openrouter/` transport prefix. Select a model that supports function tools, structured output, and the configured reasoning effort (`none`, `low`, `medium`, or `high`).
 
 An OpenRouter key is required. Direct OpenAI credentials are no longer used.
 

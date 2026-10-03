@@ -73,7 +73,7 @@ def _completion(message, finish_reason="stop"):
         "id": "test-completion",
         "object": "chat.completion",
         "created": 0,
-        "model": "openai/gpt-5.6-luna",
+        "model": "openai/gpt-6-luna",
         "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
@@ -126,7 +126,7 @@ def test_model_routes_tools_and_structured_draft_through_openrouter(
     body = json.loads(request.content)
     assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
     assert request.headers["authorization"] == "Bearer test-openrouter-key"
-    assert body["model"] == "openai/gpt-5.6-luna"
+    assert body["model"] == "openai/gpt-6-luna"
     assert body["reasoning"] == {"effort": "medium"}
     assert body["provider"] == {"require_parameters": True}
     assert body["tools"][0]["function"]["name"] == "fetch_url"

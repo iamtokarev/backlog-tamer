@@ -29,7 +29,7 @@ def test_settings_load_existing_openrouter_key_without_agent_overrides(settings_
     settings = Settings()
 
     assert settings.openrouter_api_key.get_secret_value() == "test-openrouter-key"
-    assert settings.agent.model == "openai/gpt-5.6-luna"
+    assert settings.agent.model == "openai/gpt-6-luna"
     assert settings.agent.reasoning_effort == "medium"
 
 

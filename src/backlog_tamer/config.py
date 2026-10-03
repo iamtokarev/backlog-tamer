@@ -9,7 +9,7 @@ from backlog_tamer.integrations.telegram.config import TelegramConfig
 
 
 class AgentConfig(BaseSettings):
-    model: str = "openai/gpt-5.6-luna"
+    model: str = "openai/gpt-6-luna"
     reasoning_effort: Literal["none", "low", "medium", "high"] = "medium"
 
     model_config = SettingsConfigDict(extra="ignore")

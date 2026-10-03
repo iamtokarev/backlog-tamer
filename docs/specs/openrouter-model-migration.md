@@ -5,11 +5,11 @@ Explored: 2026-10-03. No application code, configuration, dependencies, or runti
 
 ## Outcome
 
-Route every intake model request through OpenRouter using the existing Google ADK `LiteLlm` adapter. Keep the current GPT-5.6 Luna model and medium reasoning effort. Changing `AGENT__MODEL` selects another compatible model available through OpenRouter.
+Route every intake model request through OpenRouter using the existing Google ADK `LiteLlm` adapter. Default to GPT-6 Luna with medium reasoning effort. Changing `AGENT__MODEL` selects another compatible model available through OpenRouter.
 
 Interpret “switch” as replacing the direct OpenAI connection. OpenRouter becomes the sole model gateway. Remove the old credential requirement and routing implementation; do not add a provider toggle, compatibility aliases, or direct OpenAI fallback.
 
-## Current implementation and findings
+## Original implementation and findings
 
 - [`config.py`](../../src/backlog_tamer/config.py) requires `AgentConfig.openai_api_key`, defaults to `gpt-5.6-luna`, and defaults reasoning effort to `medium`. `Settings.agent` is currently required. Root settings read `.env` with the `__` nested delimiter.
 - [`agent.py`](../../src/backlog_tamer/agents/intake_triage/agent.py) is the only model-construction location. It builds `LiteLlm(model=f"openai/{settings.agent.model}", api_key=..., reasoning_effort=...)`. The drafting agent uses `fetch_url`, `output_schema=ProjectDraft`, and `output_key="draft_proposal"`.
@@ -20,7 +20,7 @@ Interpret “switch” as replacing the direct OpenAI connection. OpenRouter bec
 - The deployed healthcheck imports the agent and checks extraction dependencies, Notion schema, and installed version. It does **not** make a model request or prove the model credential works.
 - The lockfile pins Google ADK 2.4.0, LiteLLM 1.84.10, OpenAI SDK 2.24.0, and pydantic-settings 2.15.0. Application code does not import the OpenAI SDK directly; LiteLLM requires it transitively.
 
-OpenRouter currently lists [`openai/gpt-5.6-luna`](https://openrouter.ai/openai/gpt-5.6-luna), including tools, structured outputs, and reasoning support in its [model catalog](https://openrouter.ai/api/v1/models). This verifies model availability and advertised capabilities, not an authenticated end-to-end workflow.
+OpenRouter currently lists [`openai/gpt-6-luna`](https://openrouter.ai/openai/gpt-6-luna), including tools, structured outputs, and reasoning support in its [model catalog](https://openrouter.ai/api/v1/models). This verifies model availability and advertised capabilities, not an authenticated end-to-end workflow.
 
 ## Design and interface
 
@@ -39,7 +39,7 @@ The module's composition code loads settings and passes `settings.agent` and `se
 | Input | Proposed meaning | Default / requirement |
 | --- | --- | --- |
 | `OPENROUTER_API_KEY` | Root `Settings.openrouter_api_key: SecretStr` | Required; reject empty or whitespace-only values |
-| `AGENT__MODEL` | OpenRouter model slug, including its publisher | `openai/gpt-5.6-luna` |
+| `AGENT__MODEL` | OpenRouter model slug, including its publisher | `openai/gpt-6-luna` |
 | `AGENT__REASONING_EFFORT` | Existing `none`, `low`, `medium`, `high` setting | `medium` |
 
 Remove `AgentConfig.openai_api_key`. Default `Settings.agent` with `Field(default_factory=AgentConfig)` so a nested agent override is no longer needed to instantiate it. Retain the existing `.env` and environment-variable precedence, caching, and tracing configuration.
@@ -89,7 +89,7 @@ The approval workflow, prompts, draft schema, URL extraction, persistence, Teleg
 ## Validation and acceptance criteria
 
 1. Settings load from an isolated `.env` containing `OPENROUTER_API_KEY` plus existing non-model requirements, with no OpenAI credential. Test environment-variable precedence, the default agent settings, and nested model overrides. Missing or blank OpenRouter credentials fail even if an old OpenAI credential exists.
-2. Exercise the configured adapter through its generation interface with a mocked HTTP transport. Assert the destination is OpenRouter, the request model is `openai/gpt-5.6-luna`, authentication uses the dummy OpenRouter key, reasoning remains `medium`, and capability-aware routing is present. Check that a different configured publisher slug is prefixed correctly.
+2. Exercise the configured adapter through its generation interface with a mocked HTTP transport. Assert the destination is OpenRouter, the request model is `openai/gpt-6-luna`, authentication uses the dummy OpenRouter key, reasoning remains `medium`, and capability-aware routing is present. Check that a different configured publisher slug is prefixed correctly.
 3. Cover a model tool call and its tool-result continuation, plus a structured response that validates as `ProjectDraft`. Preserve ADK's draft state and human-review interrupt behavior. Error responses must propagate through existing handling without a direct-provider fallback.
 4. Update and run Lambda healthcheck tests with only the new credential contract. They must not make model calls.
 5. Run the repository's required checks: `uv run --locked ruff format --check`, `uv run --locked ruff check`, and `uv run --locked pytest -q`. Review the lockfile for unrelated churn and search maintained source/config/tests/docs for obsolete credential and routing references.
@@ -106,7 +106,7 @@ Exploration already verified the proposed settings shape with dummy credentials 
 
 ## Agreed scope
 
-OpenRouter is the sole model gateway, retaining GPT-5.6 Luna and medium reasoning, with the flat existing key spelling and publisher-qualified `AGENT__MODEL` contract above. Implementation removes direct OpenAI support rather than keeping a selectable legacy path.
+OpenRouter is the sole model gateway, using GPT-6 Luna and medium reasoning, with the flat existing key spelling and publisher-qualified `AGENT__MODEL` contract above. Implementation removes direct OpenAI support rather than keeping a selectable legacy path.
 
 ## Implementation verification
 
@@ -115,3 +115,7 @@ OpenRouter is the sole model gateway, retaining GPT-5.6 Luna and medium reasonin
 - Both smoke checks used synthetic inputs, in-memory sessions, and disabled tracing; neither wrote to Telegram or Notion.
 - Relocking removed only the two direct OpenAI dependency references from the project lock entry; all package versions remained unchanged.
 - Focused checks cover configuration, model HTTP requests and responses, tool-result continuation, the revision workflow, and Lambda healthchecks. Full-suite and review results are reported with the implementation PR.
+
+The approved scope was extended to default to GPT-6 Luna (`openai/gpt-6-luna`) at medium reasoning and regenerate the repository wiki by running OpenWiki.
+
+An authenticated GPT-6 Luna smoke check also passed public-URL fetching, structured drafting, and revision to a low-priority single-task proposal at medium reasoning. It used in-memory sessions and disabled tracing, with no Telegram or Notion writes.
