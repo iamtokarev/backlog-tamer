@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.6.1...v0.7.0) (2026-10-03)
+
+
+### Features
+
+* default to GPT-6 Luna and refresh OpenWiki ([615d07b](https://github.com/iamtokarev/backlog-tamer/commit/615d07bbbf4cbfa61611a94a686c19612f0b7650))
+* route intake models through OpenRouter ([a415eaa](https://github.com/iamtokarev/backlog-tamer/commit/a415eaa98898d5586c2be1996745aa9c59adf3e4))
+* use OpenRouter with GPT-6 Luna ([eac2c4b](https://github.com/iamtokarev/backlog-tamer/commit/eac2c4bde0bef4c0c7047ee841a3450c29c0cd23))
+
 ## [0.6.1](https://github.com/iamtokarev/backlog-tamer/compare/v0.6.0...v0.6.1) (2026-09-27)
 
 
