@@ -2,20 +2,22 @@ import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from backlog_tamer.integrations.telegram.config import TelegramConfig
 
 
 class AgentConfig(BaseSettings):
-    openai_api_key: SecretStr
-    model: str = "gpt-5.6-luna"
+    model: str = "openai/gpt-6-luna"
     reasoning_effort: Literal["none", "low", "medium", "high"] = "medium"
+
+    model_config = SettingsConfigDict(extra="ignore")
 
 
 class Settings(BaseSettings):
-    agent: AgentConfig
+    openrouter_api_key: SecretStr
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     telegram: TelegramConfig
 
     database_url: str = "sqlite:///backlog_tamer.db"
@@ -35,6 +37,13 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
     )
+
+    @field_validator("openrouter_api_key")
+    @classmethod
+    def validate_openrouter_api_key(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("OPENROUTER_API_KEY must not be blank.")
+        return value
 
     def export_to_env(self) -> None:
         if self.langsmith_api_key is not None:

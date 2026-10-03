@@ -84,7 +84,7 @@ than just blanking a field, `degraded_capabilities`.
 
 Three layers under `src/backlog_tamer/`:
 
-- **`agents/intake_triage/`** — Google ADK agent + workflow. `agent.py` defines the drafting agent (LiteLlm wrapping an OpenAI model, `output_schema=ProjectDraft`, writes to session state key `draft_proposal`). `workflow.py` builds an ADK `Workflow` graph: draft → `request_human_review` (emits a `RequestInput` interrupt) → `handle_human_review` routes to `approved` / `rejected` / `revise` (revise loops back to the draft agent with feedback). Human-in-the-loop is implemented via ADK interrupts, not chat turns.
+- **`agents/intake_triage/`** — Google ADK agent + workflow. `agent.py` defines the drafting agent (LiteLlm through OpenRouter, `output_schema=ProjectDraft`, writes to session state key `draft_proposal`). `OPENROUTER_API_KEY` is required; `AGENT__MODEL` is a publisher-qualified OpenRouter slug (default `openai/gpt-6-luna`). Native `reasoning.effort` avoids LiteLLM's model-metadata whitelist; `provider.require_parameters` preserves requested capabilities during routing. `workflow.py` builds an ADK `Workflow` graph: draft → `request_human_review` (emits a `RequestInput` interrupt) → `handle_human_review` routes to `approved` / `rejected` / `revise` (revise loops back to the draft agent with feedback). Human-in-the-loop is implemented via ADK interrupts, not chat turns.
 
 - **`application/`** — orchestration, independent of Telegram. `IntakeService` (`intake_service.py`) runs the workflow with ADK's `Runner` + `DatabaseSessionService`, extracts the `adk_request_input` interrupt from events, and persists a `ConfirmationRecord` via `ConfirmationStore` (SQLAlchemy, `confirmations` table). `start_intake` creates a session and returns a `needs_review` result; `resume_intake` replays the review reply into the paused workflow; `finalize_approval` uses `mark_committing_once` as an idempotency lock before writing to Notion (statuses: PENDING_REVIEW → COMMITTING → COMMITTED / REJECTED / FAILED). `database_urls.py` converts one `DATABASE_URL` into the sync driver (psycopg/sqlite) for the store and the async driver (asyncpg/aiosqlite) for ADK sessions — support both SQLite (local) and Postgres/Supabase (deployed) when touching persistence.
 
@@ -102,14 +102,11 @@ Terraform in `infra/terraform/` (Lambda ×2, SQS + DLQ, ECR, Secrets Manager). `
 
 ## OpenWiki
 
-See [AGENTS.md](AGENTS.md) for OpenWiki agent instructions.
-
-<!-- OPENWIKI:END -->
-time context, not required startup reading.
+This repository has a generated `openwiki/` evidence index. It is optional context, not required startup reading.
 
 - Treat source code and tests as authoritative. A brief's unknowns and review items are verification gaps, not automatic requirements.
 - Prefer the narrowest quiet validation that proves the changed behavior. Preserve complete failure output.
 
-The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
+Run `openwiki code --update` to refresh the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
 
 <!-- OPENWIKI:END -->

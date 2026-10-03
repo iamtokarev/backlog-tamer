@@ -14,7 +14,19 @@ It accepts links or notes in Telegram, uses an agent workflow to draft a project
 
 ## Local Development
 
-Install dependencies with `uv`, then create a `.env` file with the required Telegram, OpenAI, Notion, and database settings.
+Install dependencies with `uv`, then create a `.env` file with the required Telegram, OpenRouter, Notion, and database settings (see `.env.example`).
+
+Model requests use OpenRouter through ADK's LiteLLM adapter:
+
+```dotenv
+OPENROUTER_API_KEY=your-openrouter-key
+AGENT__MODEL=openai/gpt-6-luna
+AGENT__REASONING_EFFORT=medium
+```
+
+The model and reasoning settings above are the defaults. `AGENT__MODEL` takes an OpenRouter model slug including its publisher, such as `openai/gpt-6-luna`; the adapter adds the `openrouter/` transport prefix. Select a model that supports function tools, structured output, and the configured reasoning effort (`none`, `low`, `medium`, or `high`).
+
+An OpenRouter key is required. Direct OpenAI credentials are no longer used.
 
 Run the polling bot:
 
@@ -47,6 +59,10 @@ Deployment uses:
 - ECR for the Lambda container image.
 - Secrets Manager for runtime secrets.
 - Supabase/Postgres for durable state.
+
+Before releasing the OpenRouter migration, add `OPENROUTER_API_KEY` to the runtime JSON secret in Secrets Manager. Convert any existing `AGENT__MODEL` value to its publisher-qualified OpenRouter slug. The local `.env` file is not shipped to Lambda.
+
+The worker healthcheck validates configuration and imports but does not authenticate with the model. Verify a real intake and review after deployment. Keep the previous image's OpenAI credential and model configuration available during the rollback window; remove the obsolete secret entries after it closes.
 
 Build and push the image:
 

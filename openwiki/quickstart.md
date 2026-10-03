@@ -25,7 +25,7 @@ The product sits between curiosity and execution: Telegram is the low-friction i
 
 - **Python 3.12+** with `uv` for dependency management
 - **Google ADK** (≥2.4.0) — agent workflow with interrupts for human-in-the-loop
-- **LiteLLM + OpenAI** — LLM backend for the drafting agent (default model: `gpt-5.6-luna`)
+- **LiteLLM + OpenRouter** — LLM backend for the drafting agent, wired through ADK's `LiteLlm` adapter (default model: `openai/gpt-6-luna`)
 - **python-telegram-bot** (v22) — Telegram polling, webhook, and Lambda handlers
 - **Notion API** — writes project + task pages via `httpx`
 - **SQLAlchemy** (async + sync) — durable confirmation state (SQLite locally, Postgres/Supabase deployed)
@@ -46,9 +46,13 @@ make format-check                                     # CI enforces this
 
 Copy `.env.example` to `.env` and fill in the required values. Settings use `pydantic-settings` with `__` as the nested delimiter (e.g. `TELEGRAM__BOT_TOKEN` maps to `Settings.telegram.bot_token`). See `src/backlog_tamer/config.py` for the full settings model.
 
-Required env vars: `AGENT__OPENAI_API_KEY`, `TELEGRAM__BOT_TOKEN`, `TELEGRAM__ALLOWED_USER_ID`, `NOTION_TOKEN`, `NOTION_PROJECTS_DATABASE_ID`, `NOTION_TASKS_DATABASE_ID`, `DATABASE_URL`.
+Required env vars: `OPENROUTER_API_KEY`, `TELEGRAM__BOT_TOKEN`, `TELEGRAM__ALLOWED_USER_ID`, `NOTION_TOKEN`, `NOTION_PROJECTS_DATABASE_ID`, `NOTION_TASKS_DATABASE_ID`, `DATABASE_URL`. Direct OpenAI credentials are no longer used — an OpenRouter key is required and validated non-blank by `Settings`.
 
-Optional: `AGENT__MODEL` (default `gpt-5.6-luna`), `AGENT__REASONING_EFFORT` (default `medium`; must be `none`, `low`, `medium`, or `high` — `"minimal"` breaks the `fetch_url` tool on OpenAI's endpoint).
+Optional: `AGENT__MODEL` (default `openai/gpt-6-luna`; an OpenRouter model slug including its publisher, e.g. `anthropic/claude-sonnet-5`), `AGENT__REASONING_EFFORT` (default `medium`; must be `none`, `low`, `medium`, or `high`). The adapter sends native `reasoning.effort` and `provider.require_parameters=true` to OpenRouter, which preserves the model's reasoning and structured-output capabilities rather than relying on LiteLLM's parameter whitelist.
+
+## Model Validation
+
+Model wiring is regression-pinned by focused tests, not just by the deployment healthcheck. `tests/test_config.py` covers settings loading: `OPENROUTER_API_KEY` is required (blank/whitespace fails even if a legacy OpenAI key is present), environment variables override `.env`, and the defaults resolve to `openai/gpt-6-luna` at `medium` reasoning. `tests/test_agent_model.py` exercises the configured adapter through a mocked HTTP transport with a dummy key: it asserts the destination is `https://openrouter.ai/api/v1/chat/completions`, the request carries `Bearer` auth, `model` is `openai/gpt-6-luna`, `reasoning` is `{"effort": "medium"}`, `provider` is `{"require_parameters": true}`, tool declarations (`fetch_url`) and the structured `ProjectDraft` JSON schema are forwarded, tool-call IDs and tool-result continuation are preserved, a different publisher slug routes through the same endpoint, and a `401` propagates as `AuthenticationError` without a direct-provider fallback. Beyond these mocked checks, `docs/specs/openrouter-model-migration.md` records an authenticated GPT-6 Luna smoke check through the standalone runner: a public-URL intake that exercised `fetch_url`, a structured draft, and a revision returning to review — all using medium reasoning, in-memory sessions, and tracing disabled, with no Telegram or Notion writes.
 
 ## Documentation Sections
 
@@ -61,3 +65,5 @@ Optional: `AGENT__MODEL` (default `gpt-5.6-luna`), `AGENT__REASONING_EFFORT` (de
 ## Backlog
 
 - **URL fetch tool internals** (`src/backlog_tamer/agents/intake_triage/tools/fetch_url.py`) — SSRF protection (pinned-IP connections, DNS rebinding prevention, manual redirect handling), HTML/PDF parsing, and X/Twitter oEmbed handling are not yet documented in detail. The campaign-parameter stripping and key-point furniture filtering added in `e5ca04f` are covered in [Intake Workflow](workflows/intake-flow.md) and [Integrations](integrations/telegram-and-notion.md); the security model and the rest of the content extraction pipeline remain deferred. The tool is well-tested (`tests/test_fetch_url.py`) and self-contained.
+- **OpenRouter model wiring** (`src/backlog_tamer/agents/intake_triage/agent.py::_get_model`) — the `LiteLlm` adapter adds the `openrouter/` transport prefix, pins `api_base` to `https://openrouter.ai/api/v1`, and passes `reasoning.effort` + `provider.require_parameters=true` via `extra_body` to bypass LiteLLM's model-metadata parameter whitelist. Covered at the config/endpoint level in [Architecture Overview](architecture/overview.md) and [Deployment & Operations](operations/deployment.md); the request-shape contract is pinned by `tests/test_agent_model.py` (OpenRouter URL, bearer key, model slug, reasoning/provider body, publisher override, auth-error propagation). The adapter internals themselves are not otherwise documented.
+- **Secrets Manager rollout runbook** — adding `OPENROUTER_API_KEY` to the runtime JSON secret, converting any existing `AGENT__MODEL` to its publisher-qualified OpenRouter slug, and removing obsolete OpenAI secret entries after the rollback window closes. Summarized in [Deployment & Operations](operations/deployment.md); the step-by-step rotation sequence is not yet a standalone runbook.
