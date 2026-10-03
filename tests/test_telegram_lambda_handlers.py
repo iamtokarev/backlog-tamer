@@ -19,7 +19,7 @@ from backlog_tamer.integrations.telegram.lambda_handlers import (
 # populated from Secrets Manager. Tests must supply the required fields
 # explicitly rather than leaning on a local .env file that CI does not have.
 REQUIRED_SETTINGS_ENV = {
-    "AGENT__OPENAI_API_KEY": "test-openai-key",
+    "OPENROUTER_API_KEY": "test-openrouter-key",
     "TELEGRAM__BOT_TOKEN": "test-bot-token",
     "TELEGRAM__ALLOWED_USER_ID": "42",
     "NOTION_TOKEN": "test-notion-token",
@@ -29,7 +29,10 @@ REQUIRED_SETTINGS_ENV = {
 
 
 @pytest.fixture
-def healthcheck_env(monkeypatch):
+def healthcheck_env(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    for key in ("AGENT__OPENAI_API_KEY", "AGENT__MODEL", "AGENT__REASONING_EFFORT"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv(SECRET_ARN_ENV, raising=False)
     monkeypatch.setattr(
         "backlog_tamer.integrations.telegram.lambda_handlers._SECRETS_LOADED",
