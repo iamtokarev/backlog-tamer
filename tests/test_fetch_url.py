@@ -197,3 +197,128 @@ def test_key_points_drop_page_furniture():
         "Repo-To-Skill: Distilling GitHub Repositories Into AI4AI Skills",
         "DisCo distills operational knowledge into reusable agent skills.",
     ]
+
+
+def _public_dns(monkeypatch):
+    def resolve(hostname, *_args, **_kwargs):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (PUBLIC_IP, 0))
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+
+
+def _response(url: str, status: int, content_type: str, body: str):
+    headers = Message()
+    headers["content-type"] = content_type
+    return fetch_url.PublicHttpResponse(
+        url=url,
+        status=status,
+        headers=headers,
+        body=body.encode(),
+    )
+
+
+# The page YouTube serves a datacenter IP instead of the video: a site-wide
+# description and a canonical tag its own script was meant to fill in.
+YOUTUBE_SHELL_PAGE = """<html><head><title>YouTube</title>
+<meta name="description" content="Enjoy the videos and music you love.">
+<link rel="canonical" href="undefined"></head><body></body></html>"""
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://youtu.be/L1OBRtfPS34?si=Kztk0F-l0uX0cPnL",
+            "https://www.youtube.com/watch?v=L1OBRtfPS34",
+        ),
+        (
+            "https://www.youtube.com/watch?v=L1OBRtfPS34&list=PL123&t=42s",
+            "https://www.youtube.com/watch?v=L1OBRtfPS34",
+        ),
+        (
+            "https://m.youtube.com/watch?v=L1OBRtfPS34",
+            "https://www.youtube.com/watch?v=L1OBRtfPS34",
+        ),
+        (
+            "https://www.youtube.com/shorts/L1OBRtfPS34",
+            "https://www.youtube.com/watch?v=L1OBRtfPS34",
+        ),
+        (
+            "https://www.youtube.com/live/L1OBRtfPS34?feature=share",
+            "https://www.youtube.com/watch?v=L1OBRtfPS34",
+        ),
+        # Not a single video: left to the regular page fetch.
+        ("https://www.youtube.com/playlist?list=PLo2EIpI_JMQvQZm", None),
+        ("https://www.youtube.com/@ycombinator", None),
+        ("https://www.youtube.com/watch", None),
+        ("https://youtu.be/", None),
+        ("https://example.com/watch?v=L1OBRtfPS34", None),
+    ],
+)
+def test_youtube_links_resolve_to_one_watch_url(url: str, expected: str | None):
+    assert fetch_url.youtube_watch_url(url) == expected
+
+
+def test_youtube_video_is_described_by_oembed(monkeypatch):
+    requested: list[str] = []
+
+    def request(url):
+        requested.append(url)
+        return _response(
+            url,
+            200,
+            "application/json",
+            '{"title": "How to build agent harnesses", "author_name": "Y Combinator"}',
+        )
+
+    monkeypatch.setattr(fetch_url, "_request_public_url", request)
+
+    result = fetch_url._fetch_url_cached.__wrapped__("https://youtu.be/L1OBRtfPS34")
+
+    assert requested[0].startswith(fetch_url.YOUTUBE_OEMBED_ENDPOINT)
+    assert result.status == "success"
+    assert result.canonical_url == "https://www.youtube.com/watch?v=L1OBRtfPS34"
+    assert result.title == "How to build agent harnesses"
+    assert result.author == "Y Combinator"
+
+
+def test_youtube_page_fallback_keeps_the_video_url(monkeypatch):
+    """Every video was stored as youtube.com/undefined and so matched each other."""
+    _public_dns(monkeypatch)
+
+    def request(url):
+        if url.startswith(fetch_url.YOUTUBE_OEMBED_ENDPOINT):
+            return _response(url, 403, "text/html", "")
+        return _response(
+            "https://www.youtube.com/watch?v=L1OBRtfPS34",
+            200,
+            "text/html",
+            YOUTUBE_SHELL_PAGE,
+        )
+
+    monkeypatch.setattr(fetch_url, "_request_public_url", request)
+
+    result = fetch_url._fetch_url_cached.__wrapped__("https://youtu.be/L1OBRtfPS34")
+
+    assert result.status == "success"
+    assert result.canonical_url == "https://www.youtube.com/watch?v=L1OBRtfPS34"
+
+
+@pytest.mark.parametrize("href", ["undefined", "/undefined", "null"])
+def test_placeholder_canonical_tag_is_ignored(monkeypatch, href: str):
+    _public_dns(monkeypatch)
+    soup = fetch_url._build_soup(f'<link rel="canonical" href="{href}">')
+
+    assert fetch_url._extract_canonical_url(soup, "https://example.com/post/1") is None
+
+
+def test_real_canonical_tag_is_kept(monkeypatch):
+    _public_dns(monkeypatch)
+    soup = fetch_url._build_soup('<link rel="canonical" href="/post/1">')
+
+    assert (
+        fetch_url._extract_canonical_url(soup, "https://example.com/post/1?ref=x")
+        == "https://example.com/post/1"
+    )
