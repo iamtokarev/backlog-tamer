@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.1](https://github.com/iamtokarev/backlog-tamer/compare/v0.7.0...v0.7.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* store YouTube videos under their watch URL, not youtube.com/undefined ([9e776a7](https://github.com/iamtokarev/backlog-tamer/commit/9e776a75d6bf4fab1e3de17d5ff974aef544d71f))
+
+
+### Documentation
+
+* add docs for agentic workspace ([85df3ce](https://github.com/iamtokarev/backlog-tamer/commit/85df3ce72fc900b0b00fa64acbc068c277660f52))
+
 ## [0.7.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.6.1...v0.7.0) (2026-10-03)
 
 
