@@ -81,6 +81,21 @@ X_STATUS_PATH_RE: Final[re.Pattern[str]] = re.compile(
     r"^/(?:i/web/)?(?:[A-Za-z0-9_]+)/status/(\d+)(?:/)?$"
 )
 X_OEMBED_ENDPOINT: Final[str] = "https://publish.twitter.com/oembed"
+YOUTUBE_HOSTS: Final[frozenset[str]] = frozenset(
+    {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
+)
+YOUTUBE_SHORT_HOSTS: Final[frozenset[str]] = frozenset({"youtu.be", "www.youtu.be"})
+YOUTUBE_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]{11}$")
+YOUTUBE_PATH_ID_RE: Final[re.Pattern[str]] = re.compile(
+    r"^/(?:shorts|live|embed|v)/([^/]+)/?$"
+)
+YOUTUBE_OEMBED_ENDPOINT: Final[str] = "https://www.youtube.com/oembed"
+# What a JS-templated page renders into <link rel="canonical"> before the
+# script that fills it runs. YouTube serves one to datacenter IPs, and
+# urljoin turns it into "https://www.youtube.com/undefined" for every video.
+PLACEHOLDER_CANONICAL_SEGMENTS: Final[frozenset[str]] = frozenset(
+    {"undefined", "null", "none"}
+)
 FETCHED_CONTEXT_STATE_KEY: Final[str] = "fetched_context"
 
 
@@ -194,6 +209,22 @@ def _fetch_url_cached(normalized_url: str) -> FetchedUrl:
         if x_result is not None:
             return x_result
 
+    youtube_url = youtube_watch_url(normalized_url)
+    if youtube_url is not None:
+        youtube_result = _fetch_youtube_oembed(normalized_url, youtube_url)
+        if youtube_result is not None:
+            return youtube_result
+        # The page itself only says which video it is through a canonical tag
+        # YouTube may not fill in, so pin the one the link already names.
+        page_result = _fetch_page(normalized_url)
+        if page_result.status != "success":
+            return page_result
+        return page_result.model_copy(update={"canonical_url": youtube_url})
+
+    return _fetch_page(normalized_url)
+
+
+def _fetch_page(normalized_url: str) -> FetchedUrl:
     try:
         response = _request_public_url(normalized_url)
     except RedirectLimitExceededError as exc:
@@ -278,16 +309,9 @@ def _fetch_url_cached(normalized_url: str) -> FetchedUrl:
     )
 
 
-def _fetch_x_status_oembed(normalized_url: str) -> FetchedUrl | None:
-    oembed_url = f"{X_OEMBED_ENDPOINT}?" + urlencode(
-        {
-            "url": normalized_url,
-            "omit_script": "1",
-            "dnt": "true",
-        }
-    )
+def _request_json(url: str) -> dict | None:
     try:
-        response = _request_public_url(oembed_url)
+        response = _request_public_url(url)
         if response.status >= 400:
             return None
         if response.headers.get_content_type() != "application/json":
@@ -305,6 +329,80 @@ def _fetch_x_status_oembed(normalized_url: str) -> FetchedUrl | None:
 
         data = json.loads(payload)
     except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def youtube_watch_url(url: str) -> str | None:
+    """The one URL a YouTube video is stored under, or None if not a video.
+
+    youtu.be, m., /shorts/, /live/ and /embed/ links, with or without a
+    timestamp or playlist, all name the same video; storing them as one URL
+    is what lets the duplicate check recognise a re-send.
+    """
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    video_id = None
+    if hostname in YOUTUBE_SHORT_HOSTS:
+        video_id = parsed.path.strip("/")
+    elif hostname in YOUTUBE_HOSTS:
+        if parsed.path.rstrip("/") == "/watch":
+            video_id = dict(parse_qsl(parsed.query)).get("v")
+        else:
+            match = YOUTUBE_PATH_ID_RE.match(parsed.path)
+            video_id = match.group(1) if match else None
+
+    if not video_id or not YOUTUBE_ID_RE.match(video_id):
+        return None
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def _fetch_youtube_oembed(
+    normalized_url: str,
+    watch_url: str,
+) -> FetchedUrl | None:
+    data = _request_json(
+        f"{YOUTUBE_OEMBED_ENDPOINT}?" + urlencode({"url": watch_url, "format": "json"})
+    )
+    if data is None:
+        return None
+
+    title = _clean_text(data.get("title"))
+    if not title:
+        return None
+    channel = _clean_text(data.get("author_name"))
+
+    return FetchedUrl(
+        status="success",
+        requested_url=normalized_url,
+        final_url=watch_url,
+        canonical_url=watch_url,
+        domain="www.youtube.com",
+        page_kind="text",
+        content_type="application/json+oembed",
+        title=title,
+        site_name="YouTube",
+        author=channel,
+        content_preview=f"{title} by {channel}" if channel else title,
+        notes=[
+            "Fetched via YouTube oEmbed: title and channel only, "
+            "no description or transcript."
+        ],
+    )
+
+
+def _fetch_x_status_oembed(normalized_url: str) -> FetchedUrl | None:
+    data = _request_json(
+        f"{X_OEMBED_ENDPOINT}?"
+        + urlencode(
+            {
+                "url": normalized_url,
+                "omit_script": "1",
+                "dnt": "true",
+            }
+        )
+    )
+    if data is None:
         return None
 
     tweet_text, published_at, embedded_url = _parse_x_oembed_html(data.get("html"))
@@ -754,9 +852,14 @@ def _extract_canonical_url(soup, final_url: str) -> str | None:
     if not link or not link.get("href"):
         return None
     try:
-        return _normalize_public_url(urljoin(final_url, link["href"]))
+        canonical_url = _normalize_public_url(urljoin(final_url, link["href"]))
     except ValueError:
         return None
+
+    last_segment = urlparse(canonical_url).path.rstrip("/").rsplit("/", 1)[-1]
+    if last_segment.lower() in PLACEHOLDER_CANONICAL_SEGMENTS:
+        return None
+    return canonical_url
 
 
 def _collect_headings(soup) -> list[str]:
