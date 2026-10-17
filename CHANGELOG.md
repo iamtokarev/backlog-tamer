@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.2](https://github.com/iamtokarev/backlog-tamer/compare/v0.7.1...v0.7.2) (2026-10-17)
+
+
+### Bug Fixes
+
+* route a finished Triage turn before reading the Draft ([de506d3](https://github.com/iamtokarev/backlog-tamer/commit/de506d3e44cdebc500160f62175ac0a22c5b9543))
+* route review decisions on a structured reply, so revision feedback that reads "Approve" no longer commits the draft ([482e164](https://github.com/iamtokarev/backlog-tamer/commit/482e1646849cdcf762941e3806cd184219d6c648))
+* stop caching failed page fetches ([9a833ed](https://github.com/iamtokarev/backlog-tamer/commit/9a833edc89b2695703cfd70adeedac7fa59fbd77))
+
+
+### Documentation
+
+* add glossary and triage workflow seam spec ([70f2bf4](https://github.com/iamtokarev/backlog-tamer/commit/70f2bf46f0e252025ffd0b4e145e3e874bff93bd))
+* refresh OpenWiki and resolve triage workflow seam tickets ([3a5aa14](https://github.com/iamtokarev/backlog-tamer/commit/3a5aa14c4c34f4ee91c62654a4f0dadbdae53924))
+* rewrite README around a real review example ([cf90132](https://github.com/iamtokarev/backlog-tamer/commit/cf90132a322b1094565adf5f99e633add949bbb9))
+* rewrite README around a real review example ([3bc22b8](https://github.com/iamtokarev/backlog-tamer/commit/3bc22b8c8cba68b90db181a00c5d0e86fafdf354))
+
 ## [0.7.1](https://github.com/iamtokarev/backlog-tamer/compare/v0.7.0...v0.7.1) (2026-10-16)
 
 
