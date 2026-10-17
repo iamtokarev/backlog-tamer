@@ -13,6 +13,7 @@ from backlog_tamer.agents.intake_triage.schemas import (
     IncomingContext,
     ProjectDraft,
 )
+from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 
 from .database_urls import to_sync_database_url, uses_external_pooler
 from .models import ConfirmationRecord, ConfirmationStatus, ManualEdit
@@ -84,8 +85,7 @@ class ConfirmationStore:
         *,
         confirmation_id: str,
         draft_proposal: ProjectDraft,
-        invocation_id: str,
-        request_input_call_id: str,
+        checkpoint: Checkpoint,
         review_message: str,
         grounding: DraftGrounding | None = None,
     ) -> None:
@@ -94,8 +94,9 @@ class ConfirmationStore:
             row.draft_proposal_json = draft_proposal.model_dump_json()
             if grounding is not None:
                 row.grounding_json = grounding.model_dump_json()
-            row.invocation_id = invocation_id
-            row.request_input_call_id = request_input_call_id
+            row.session_id = checkpoint.session_id
+            row.invocation_id = checkpoint.invocation_id
+            row.request_input_call_id = checkpoint.request_input_call_id
             row.review_message = review_message
             row.manual_edits_json = None
             row.updated_at = utc_now()
@@ -253,9 +254,9 @@ class ConfirmationStore:
             user_id=record.user_id,
             chat_id=record.chat_id,
             source_message_id=record.source_message_id,
-            session_id=record.session_id,
-            invocation_id=record.invocation_id,
-            request_input_call_id=record.request_input_call_id,
+            session_id=record.checkpoint.session_id,
+            invocation_id=record.checkpoint.invocation_id,
+            request_input_call_id=record.checkpoint.request_input_call_id,
             status=record.status.value,
             incoming_context_json=record.incoming_context.model_dump_json(),
             draft_proposal_json=record.draft_proposal.model_dump_json(),
@@ -281,9 +282,12 @@ class ConfirmationStore:
             user_id=row.user_id,
             chat_id=row.chat_id,
             source_message_id=row.source_message_id,
-            session_id=row.session_id,
-            invocation_id=row.invocation_id,
-            request_input_call_id=row.request_input_call_id,
+            checkpoint=Checkpoint(
+                user_id=row.user_id,
+                session_id=row.session_id,
+                invocation_id=row.invocation_id,
+                request_input_call_id=row.request_input_call_id,
+            ),
             status=ConfirmationStatus(row.status),
             incoming_context=IncomingContext.model_validate_json(
                 row.incoming_context_json

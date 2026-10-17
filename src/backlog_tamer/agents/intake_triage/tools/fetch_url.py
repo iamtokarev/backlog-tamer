@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from google.adk.tools import ToolContext
 
 from ..schemas import FetchedUrl
+from ..workflow import FETCHED_CONTEXT_STATE_KEY
 
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
 MAX_REDIRECTS: Final[int] = 5
@@ -96,7 +97,6 @@ YOUTUBE_OEMBED_ENDPOINT: Final[str] = "https://www.youtube.com/oembed"
 PLACEHOLDER_CANONICAL_SEGMENTS: Final[frozenset[str]] = frozenset(
     {"undefined", "null", "none"}
 )
-FETCHED_CONTEXT_STATE_KEY: Final[str] = "fetched_context"
 
 # Process-wide, so it lives as long as a warm Lambda. Only successes go in:
 # a timeout or a 503 is usually transient, and caching it would serve the

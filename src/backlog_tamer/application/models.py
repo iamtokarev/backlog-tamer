@@ -10,6 +10,7 @@ from backlog_tamer.agents.intake_triage.schemas import (
     IncomingContext,
     ProjectDraft,
 )
+from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 
 
 class ConfirmationStatus(StrEnum):
@@ -51,9 +52,8 @@ class ConfirmationRecord(BaseModel):
     user_id: str
     chat_id: str | None = None
     source_message_id: str | None = None
-    session_id: str
-    invocation_id: str
-    request_input_call_id: str
+    # Opaque: stored and handed back to TriageWorkflow, never read here.
+    checkpoint: Checkpoint
     status: ConfirmationStatus
     incoming_context: IncomingContext
     draft_proposal: ProjectDraft

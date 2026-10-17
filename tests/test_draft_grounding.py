@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from backlog_tamer.agents.intake_triage.schemas import DraftGrounding, ProjectDraft
-from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.integrations.notion.writer import build_project_children
 from backlog_tamer.integrations.telegram.rendering import (
     build_review_keyboard,
@@ -21,81 +20,6 @@ def _draft(**overrides) -> ProjectDraft:
     }
     payload.update(overrides)
     return ProjectDraft(**payload)
-
-
-def _extract(state: dict, draft: ProjectDraft) -> DraftGrounding:
-    service = IntakeService.__new__(IntakeService)
-    return service._extract_grounding(state, draft)
-
-
-def test_grounding_is_skipped_when_no_url_was_fetched():
-    grounding = _extract({}, _draft(source_url=None))
-
-    assert grounding.fetch_status == "skipped"
-    assert not grounding.is_degraded
-
-
-def test_grounding_captures_site_name_and_key_points_on_success():
-    state = {
-        "fetched_context": {
-            "https://blog.langchain.com/langgraph/": {
-                "status": "success",
-                "title": "LangGraph: Multi-Agent Workflows",
-                "site_name": "LangChain Blog",
-                "canonical_url": "https://blog.langchain.com/langgraph/",
-                "key_points": [
-                    "Supervisor pattern",
-                    "Hierarchical teams",
-                    "",
-                    "d",
-                    "e",
-                ],
-            }
-        }
-    }
-
-    grounding = _extract(state, _draft())
-
-    assert grounding.fetch_status == "success"
-    assert grounding.site_name == "LangChain Blog"
-    assert grounding.page_title == "LangGraph: Multi-Agent Workflows"
-    assert grounding.key_points == [
-        "Supervisor pattern",
-        "Hierarchical teams",
-        "d",
-        "e",
-    ]
-
-
-def test_grounding_records_the_failure_when_the_page_could_not_be_read():
-    state = {
-        "fetched_context": {
-            "https://blog.langchain.com/langgraph/": {
-                "status": "error",
-                "error": "HTTP 403 while fetching URL.",
-            }
-        }
-    }
-
-    grounding = _extract(state, _draft())
-
-    assert grounding.is_degraded
-    assert grounding.fetch_error == "HTTP 403 while fetching URL."
-    assert grounding.key_points == []
-
-
-def test_grounding_matches_the_entry_for_the_drafts_own_source():
-    state = {
-        "fetched_context": {
-            "https://example.com/other": {"status": "success", "site_name": "Other"},
-            "https://blog.langchain.com/langgraph/": {
-                "status": "success",
-                "site_name": "LangChain Blog",
-            },
-        }
-    }
-
-    assert _extract(state, _draft()).site_name == "LangChain Blog"
 
 
 def test_degraded_fetch_is_visible_on_the_card_and_offers_a_retry():

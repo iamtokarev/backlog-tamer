@@ -17,8 +17,21 @@ REVIEW_INTERRUPT_ID = "human_review"
 TRIAGE_INPUT_STATE_KEY = "triage_input"
 REVIEW_FEEDBACK_STATE_KEY = "review_feedback"
 REVIEW_HISTORY_STATE_KEY = "review_history"
+# Written by the drafting agent (its output_key) and by fetch_url.
+DRAFT_PROPOSAL_STATE_KEY = "draft_proposal"
 FETCHED_CONTEXT_STATE_KEY = "fetched_context"
 DRAFT_SNAPSHOT_STATE_KEY = "draft_snapshot"
+
+REVIEW_DECISION_FIELD = "decision"
+REVIEW_FEEDBACK_FIELD = "feedback"
+DECISION_APPROVE = "approve"
+DECISION_REJECT = "reject"
+DECISION_REVISE = "revise"
+REVIEW_DECISIONS = frozenset({DECISION_APPROVE, DECISION_REJECT, DECISION_REVISE})
+
+ROUTE_APPROVED = "approved"
+ROUTE_REJECTED = "rejected"
+ROUTE_REVISE = "revise"
 
 
 def build_triage_message(
@@ -62,29 +75,38 @@ def request_human_review(
     )
 
 
+def build_review_reply(decision: str, feedback: str = "") -> dict[str, str]:
+    """The structured answer to the review interrupt.
+
+    Routing on the decision rather than the reply text means revision
+    feedback that happens to read "approve" is still a revision.
+    """
+    if decision not in REVIEW_DECISIONS:
+        raise ValueError(f"Unknown review decision: {decision!r}")
+    return {REVIEW_DECISION_FIELD: decision, REVIEW_FEEDBACK_FIELD: feedback}
+
+
 def handle_human_review(
-    node_input: str | dict[str, str],
+    node_input: dict[str, str],
     review_history: list[str] | None = None,
 ):
-    if isinstance(node_input, dict):
-        feedback = node_input.get("value", "")
-    else:
-        feedback = node_input
+    decision = node_input.get(REVIEW_DECISION_FIELD)
 
-    feedback = feedback.strip()
-    normalized_feedback = feedback.lower()
-
-    if normalized_feedback == "approve":
-        yield Event(route="approved")
+    if decision == DECISION_APPROVE:
+        yield Event(route=ROUTE_APPROVED)
         return
 
-    if normalized_feedback == "reject":
-        yield Event(route="rejected")
+    if decision == DECISION_REJECT:
+        yield Event(route=ROUTE_REJECTED)
         return
 
+    if decision != DECISION_REVISE:
+        raise ValueError(f"Unknown review decision: {decision!r}")
+
+    feedback = (node_input.get(REVIEW_FEEDBACK_FIELD) or "").strip()
     updated_review_history = [*(review_history or []), feedback]
     yield Event(
-        route="revise",
+        route=ROUTE_REVISE,
         actions=EventActions(
             state_delta={
                 REVIEW_FEEDBACK_STATE_KEY: feedback,
@@ -119,9 +141,9 @@ def build_intake_workflow(draft_node: Callable) -> Workflow:
             (
                 handle_human_review,
                 {
-                    "approved": finalize_approval,
-                    "rejected": finalize_rejection,
-                    "revise": build_revision_prompt,
+                    ROUTE_APPROVED: finalize_approval,
+                    ROUTE_REJECTED: finalize_rejection,
+                    ROUTE_REVISE: build_revision_prompt,
                 },
             ),
             (build_revision_prompt, draft_node),

@@ -202,14 +202,16 @@ async def handle_callback(
             result = await intake_service.undo_commit(confirmation_id)
         elif action == CALLBACK_ADD_TASK:
             result = await intake_service.add_to_existing_project(confirmation_id)
+        elif action == CALLBACK_APPROVE:
+            result = await intake_service.approve(confirmation_id)
         else:
-            result = await intake_service.resume_intake(confirmation_id, action)
+            result = await intake_service.reject(confirmation_id)
     except ValueError:
-        logger.exception("resume_intake failed for confirmation %s", confirmation_id)
+        logger.exception("review action failed for confirmation %s", confirmation_id)
         await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
         return
     except Exception:
-        logger.exception("Unexpected resume_intake error")
+        logger.exception("Unexpected review action error")
         await query.edit_message_text(REVIEW_ERROR_REPLY)
         return
 
@@ -234,7 +236,7 @@ async def _handle_refetch(
     await query.edit_message_text(REFETCHING_MESSAGE, parse_mode=ParseMode.HTML)
 
     try:
-        result = await intake_service.resume_intake(confirmation_id, REFETCH_FEEDBACK)
+        result = await intake_service.revise(confirmation_id, REFETCH_FEEDBACK)
     except ValueError:
         logger.exception("refetch failed for confirmation %s", confirmation_id)
         await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
@@ -384,13 +386,13 @@ async def _handle_revision_text(
     progress = await message.reply_text(REVISING_MESSAGE, parse_mode=ParseMode.HTML)
 
     try:
-        result = await intake_service.resume_intake(confirmation_id, feedback)
+        result = await intake_service.revise(confirmation_id, feedback)
     except ValueError:
-        logger.exception("resume_intake failed for confirmation %s", confirmation_id)
+        logger.exception("revision failed for confirmation %s", confirmation_id)
         await progress.edit_text(UNKNOWN_CONFIRMATION_REPLY)
         return
     except Exception:
-        logger.exception("Unexpected resume_intake error during revision")
+        logger.exception("Unexpected error during revision")
         await progress.edit_text(REVIEW_ERROR_REPLY)
         return
 

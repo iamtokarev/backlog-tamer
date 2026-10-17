@@ -4,60 +4,17 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from fakes import FakeNotionWriter, ScriptedTriageWorkflow, build_settings
 
 from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
     IncomingContext,
     ProjectDraft,
 )
+from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 from backlog_tamer.application.confirmation_store import ConfirmationStore, utc_now
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationRecord, ConfirmationStatus
-from backlog_tamer.integrations.notion import ExistingProject, NotionCommitResult
-
-
-class FakeNotionWriter:
-    def __init__(self, *, fail: bool = False):
-        self.fail = fail
-        self.calls: list[ProjectDraft] = []
-        self.contexts: list[IncomingContext | None] = []
-        self.groundings: list[DraftGrounding | None] = []
-        self.existing_project: ExistingProject | None = None
-        self.archived: list[str] = []
-        self.added_task_project_ids: list[str] = []
-
-    async def find_project_by_source(self, source_url: str) -> ExistingProject | None:
-        return self.existing_project
-
-    async def archive_pages(self, page_ids: list[str]) -> None:
-        self.archived.extend(page_ids)
-
-    async def add_tasks_to_project(
-        self,
-        *,
-        project_id: str,
-        draft: ProjectDraft,
-        grounding: DraftGrounding | None = None,
-    ):
-        self.added_task_project_ids.append(project_id)
-        return ["new-task-id"]
-
-    async def create_project_with_tasks(
-        self,
-        draft: ProjectDraft,
-        incoming_context: IncomingContext | None = None,
-        grounding: DraftGrounding | None = None,
-    ) -> NotionCommitResult:
-        self.calls.append(draft)
-        self.contexts.append(incoming_context)
-        self.groundings.append(grounding)
-        if self.fail:
-            raise RuntimeError("notion unavailable")
-        return NotionCommitResult(
-            project_id="project-id",
-            project_url="https://notion.so/project-id",
-            task_ids=["task-id"],
-        )
+from backlog_tamer.integrations.notion import ExistingProject
 
 
 def test_finalize_approval_commits_project_and_is_idempotent(tmp_path: Path):
@@ -146,10 +103,12 @@ def _build_service(
     store: ConfirmationStore,
     writer: FakeNotionWriter,
 ) -> IntakeService:
-    service = IntakeService.__new__(IntakeService)
-    service.store = store
-    service.notion_writer = writer
-    return service
+    return IntakeService(
+        settings=build_settings(),
+        store=store,
+        notion_writer=writer,
+        workflow=ScriptedTriageWorkflow(),
+    )
 
 
 def _build_confirmation() -> ConfirmationRecord:
@@ -159,9 +118,12 @@ def _build_confirmation() -> ConfirmationRecord:
         user_id="user-id",
         chat_id="chat-id",
         source_message_id="message-id",
-        session_id="session-id",
-        invocation_id="invocation-id",
-        request_input_call_id="call-id",
+        checkpoint=Checkpoint(
+            user_id="user-id",
+            session_id="session-id",
+            invocation_id="invocation-id",
+            request_input_call_id="call-id",
+        ),
         status=ConfirmationStatus.PENDING_REVIEW,
         incoming_context=IncomingContext(raw_text="https://example.com"),
         draft_proposal=ProjectDraft(

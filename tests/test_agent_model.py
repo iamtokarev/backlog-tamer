@@ -6,7 +6,6 @@ import json
 import httpx
 import pytest
 from google.adk.models.llm_request import LlmRequest
-from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import SecretStr
@@ -240,15 +239,10 @@ def test_model_authentication_error_propagates_without_fallback(
 def test_workflow_persists_draft_and_returns_to_review_after_revision(
     model_factory, model_http
 ):
-    from backlog_tamer.agents.intake_triage.agent import root_agent
     from backlog_tamer.agents.intake_triage.schemas import IncomingContext
-    from backlog_tamer.agents.intake_triage.workflow import (
-        build_triage_message,
-        build_triage_state_delta,
-    )
-    from backlog_tamer.dev.run_intake_workflow import (
-        build_review_response,
-        extract_request_input_handles,
+    from backlog_tamer.agents.intake_triage.triage_workflow import (
+        NeedsReview,
+        TriageWorkflow,
     )
 
     requests, responses = model_http
@@ -259,48 +253,18 @@ def test_workflow_persists_draft_and_returns_to_review_after_revision(
     )
 
     async def run():
-        sessions = InMemorySessionService()
-        runner = Runner(agent=root_agent, app_name="test", session_service=sessions)
-        await sessions.create_session(
-            app_name="test", user_id="user", session_id="test"
+        workflow = TriageWorkflow.from_settings(
+            get_settings(), session_service=InMemorySessionService()
         )
-        context = IncomingContext(raw_text="Explore Example")
-        events = [
-            event
-            async for event in runner.run_async(
-                user_id="user",
-                session_id="test",
-                new_message=build_triage_message(context),
-                state_delta=build_triage_state_delta(context),
-            )
-        ]
-        handles = extract_request_input_handles(events)
-        session = await sessions.get_session(
-            app_name="test", user_id="user", session_id="test"
+        started = await workflow.start(
+            IncomingContext(raw_text="Explore Example"), "user", []
         )
-        assert (
-            ProjectDraft.model_validate(session.state["draft_proposal"]).priority
-            == "Medium"
-        )
-        revised_events = [
-            event
-            async for event in runner.run_async(
-                user_id="user",
-                session_id="test",
-                invocation_id=handles["invocation_id"],
-                new_message=build_review_response(
-                    handles["request_input_call_id"], "Make it high priority"
-                ),
-            )
-        ]
-        assert extract_request_input_handles(revised_events)["request_input_call_id"]
-        session = await sessions.get_session(
-            app_name="test", user_id="user", session_id="test"
-        )
-        assert (
-            ProjectDraft.model_validate(session.state["draft_proposal"]).priority
-            == "High"
-        )
+        assert isinstance(started, NeedsReview)
+        assert started.draft.priority == "Medium"
+
+        outcome = await workflow.revise(started.checkpoint, "Make it high priority", {})
+        assert isinstance(outcome, NeedsReview)
+        assert outcome.draft.priority == "High"
 
     asyncio.run(run())
     assert len(requests) == 2

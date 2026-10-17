@@ -2,82 +2,46 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-from google.adk.runners import Runner
-from google.adk.sessions import DatabaseSessionService
-from google.genai import types
-
-from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
-    IncomingContext,
-    ProjectDraft,
-)
-from backlog_tamer.agents.intake_triage.task_names import with_composed_task_names
-from backlog_tamer.agents.intake_triage.workflow import (
-    build_triage_message,
-    build_triage_state_delta,
+from backlog_tamer.agents.intake_triage.schemas import IncomingContext
+from backlog_tamer.agents.intake_triage.triage_workflow import (
+    Approved,
+    NeedsReview,
+    Rejected,
+    TriageWorkflow,
+    TurnOutcome,
 )
 from backlog_tamer.config import Settings, get_settings
 from backlog_tamer.integrations.notion import NotionWriter
 
 from .confirmation_store import ConfirmationStore, utc_now
-from .database_urls import async_engine_options, to_adk_session_database_url
 from .models import (
     ConfirmationRecord,
     ConfirmationStatus,
     IntakeResult,
-    ManualEdit,
 )
 
 logger = logging.getLogger(__name__)
 
-APP_NAME = "backlog_tamer"
-REQUEST_INPUT_TOOL_NAME = "adk_request_input"
-FETCHED_CONTEXT_STATE_KEY = "fetched_context"
-MAX_GROUNDING_KEY_POINTS = 4
-_LANGSMITH_CONFIGURED = False
+# A Review in one of these has already ended; a late button press only
+# reports where it stands.
+TERMINAL_STATUSES = frozenset(
+    {
+        ConfirmationStatus.COMMITTING,
+        ConfirmationStatus.COMMITTED,
+        ConfirmationStatus.REJECTED,
+        ConfirmationStatus.FAILED,
+        ConfirmationStatus.DUPLICATE,
+        ConfirmationStatus.UNDONE,
+    }
+)
 
 
-def _to_session_service_db_url(database_url: str) -> str:
-    return to_adk_session_database_url(database_url)
-
-
-def _match_fetched_entry(
-    fetched: dict[str, Any],
-    source_url: str | None,
-) -> Any:
-    """Prefer the entry for the draft's own source, else the first fetch."""
-    if source_url:
-        for key, payload in fetched.items():
-            if key == source_url:
-                return payload
-        for payload in fetched.values():
-            if isinstance(payload, dict) and source_url in {
-                payload.get("final_url"),
-                payload.get("canonical_url"),
-                payload.get("requested_url"),
-            }:
-                return payload
-    return next(iter(fetched.values()), None)
-
-
-def _with_manual_edits(review_reply: str, manual_edits: dict[str, ManualEdit]) -> str:
-    """Tell the agent which fields the user already fixed with the buttons.
-
-    Quick edits patch the stored draft only; the workflow session still holds
-    the agent's own last draft, so without this the next revision would
-    silently undo them.
-    """
-    if not manual_edits or review_reply in {"approve", "reject"}:
-        return review_reply
-
-    applied = ", ".join(f"{field}={edit.after}" for field, edit in manual_edits.items())
-    return (
-        f"I already corrected these fields myself, keep them exactly as they are: "
-        f"{applied}.\n\n{review_reply}"
-    )
+def _kept_fields(confirmation: ConfirmationRecord) -> dict[str, str]:
+    """Quick edits the next Revision must not undo."""
+    return {field: edit.after for field, edit in confirmation.manual_edits.items()}
 
 
 def _log_corrections(confirmation: ConfirmationRecord) -> None:
@@ -113,22 +77,15 @@ class IntakeService:
         store: ConfirmationStore | None = None,
         settings: Settings | None = None,
         notion_writer: NotionWriter | None = None,
-        app_name: str = APP_NAME,
+        workflow: TriageWorkflow | None = None,
     ):
         self.settings = settings or get_settings()
         self.database_url = database_url or self.settings.database_url
-        self.session_database_url = _to_session_service_db_url(self.database_url)
-        self.app_name = app_name
         self.store = store or ConfirmationStore(self.database_url)
         self.notion_writer = notion_writer
-        self.session_service = DatabaseSessionService(
-            db_url=self.session_database_url,
-            **async_engine_options(self.database_url),
-        )
-        self.runner = Runner(
-            agent=self._get_root_agent(),
-            app_name=self.app_name,
-            session_service=self.session_service,
+        self.workflow = workflow or TriageWorkflow.from_settings(
+            self.settings,
+            self.database_url,
         )
 
     async def start_intake(
@@ -138,41 +95,27 @@ class IntakeService:
         chat_id: str | None = None,
         source_message_id: str | None = None,
     ) -> IntakeResult:
-        session_id = str(uuid4())
-        await self.session_service.create_session(
-            app_name=self.app_name,
-            user_id=user_id,
-            session_id=session_id,
+        outcome = await self.workflow.start(
+            context,
+            user_id,
+            await self._known_topics(),
         )
+        if not isinstance(outcome, NeedsReview):
+            raise RuntimeError(
+                f"A new Triage ended without a Draft to review: {outcome!r}",
+            )
 
-        known_topics = await self._known_topics()
-        events = await self._run_turn(
-            user_id=user_id,
-            session_id=session_id,
-            message=build_triage_message(context, known_topics),
-            state_delta=build_triage_state_delta(context, known_topics),
-        )
-
-        session_state = await self._get_session_state(
-            user_id=user_id,
-            session_id=session_id,
-        )
-        draft = self._extract_draft_from_state(session_state)
-        grounding = self._extract_grounding(session_state, draft)
-        interrupt = self._extract_request_input(events)
         confirmation = ConfirmationRecord(
             confirmation_id=str(uuid4()),
             user_id=user_id,
             chat_id=chat_id,
             source_message_id=source_message_id,
-            session_id=session_id,
-            invocation_id=interrupt["invocation_id"],
-            request_input_call_id=interrupt["request_input_call_id"],
+            checkpoint=outcome.checkpoint,
             status=ConfirmationStatus.PENDING_REVIEW,
             incoming_context=context,
-            draft_proposal=draft,
-            grounding=grounding,
-            review_message=interrupt["review_message"],
+            draft_proposal=outcome.draft,
+            grounding=outcome.grounding,
+            review_message=outcome.review_message,
             created_at=utc_now(),
             updated_at=utc_now(),
         )
@@ -180,27 +123,43 @@ class IntakeService:
         return IntakeResult(
             status="needs_review",
             confirmation_id=confirmation.confirmation_id,
-            draft_proposal=draft,
-            grounding=grounding,
-            review_message=confirmation.review_message,
+            draft_proposal=outcome.draft,
+            grounding=outcome.grounding,
+            review_message=outcome.review_message,
         )
 
-    async def resume_intake(
+    async def approve(self, confirmation_id: str) -> IntakeResult:
+        return await self._resume(
+            confirmation_id,
+            lambda confirmation: self.workflow.approve(confirmation.checkpoint),
+        )
+
+    async def reject(self, confirmation_id: str) -> IntakeResult:
+        return await self._resume(
+            confirmation_id,
+            lambda confirmation: self.workflow.reject(confirmation.checkpoint),
+        )
+
+    async def revise(self, confirmation_id: str, feedback: str) -> IntakeResult:
+        """Send the Draft back to the agent with the user's Revision."""
+        return await self._resume(
+            confirmation_id,
+            lambda confirmation: self.workflow.revise(
+                confirmation.checkpoint,
+                feedback,
+                _kept_fields(confirmation),
+            ),
+        )
+
+    async def _resume(
         self,
         confirmation_id: str,
-        review_reply: str,
+        turn: Callable[[ConfirmationRecord], Awaitable[TurnOutcome]],
     ) -> IntakeResult:
         confirmation = self.store.get(confirmation_id)
         if confirmation is None:
             raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
-        if confirmation.status in {
-            ConfirmationStatus.COMMITTING,
-            ConfirmationStatus.COMMITTED,
-            ConfirmationStatus.REJECTED,
-            ConfirmationStatus.FAILED,
-            ConfirmationStatus.DUPLICATE,
-            ConfirmationStatus.UNDONE,
-        }:
+        if confirmation.status in TERMINAL_STATUSES:
             return IntakeResult(
                 status=confirmation.status.value,
                 confirmation_id=confirmation_id,
@@ -214,55 +173,33 @@ class IntakeService:
                 f"{confirmation.status.value}",
             )
 
-        events = await self._run_turn(
-            user_id=confirmation.user_id,
-            session_id=confirmation.session_id,
-            invocation_id=confirmation.invocation_id,
-            message=self._build_review_response(
-                confirmation.request_input_call_id,
-                _with_manual_edits(review_reply, confirmation.manual_edits),
-            ),
-        )
-        session_state = await self._get_session_state(
-            user_id=confirmation.user_id,
-            session_id=confirmation.session_id,
-        )
-
-        interrupt = self._try_extract_request_input(events)
-        if interrupt is not None:
-            draft = self._extract_draft_from_state(session_state)
-            grounding = self._extract_grounding(session_state, draft)
-            self.store.update_after_resume(
-                confirmation_id=confirmation_id,
-                draft_proposal=draft,
-                invocation_id=interrupt["invocation_id"],
-                request_input_call_id=interrupt["request_input_call_id"],
-                review_message=interrupt["review_message"],
-                grounding=grounding,
-            )
-            return IntakeResult(
-                status="needs_review",
-                confirmation_id=confirmation_id,
-                draft_proposal=draft,
-                grounding=grounding,
-                review_message=interrupt["review_message"],
-            )
-
-        route = self._extract_route(events)
-        if route == "approved":
-            return await self.finalize_approval(confirmation_id)
-        if route == "rejected":
-            self.store.mark_rejected(confirmation_id)
-            return IntakeResult(
-                status="rejected",
-                confirmation_id=confirmation_id,
-                draft_proposal=self._try_extract_draft_from_state(session_state)
-                or confirmation.draft_proposal,
-            )
-
-        raise RuntimeError(
-            "Workflow resume produced neither a review interrupt nor a final route.",
-        )
+        outcome = await turn(confirmation)
+        match outcome:
+            case NeedsReview():
+                self.store.update_after_resume(
+                    confirmation_id=confirmation_id,
+                    draft_proposal=outcome.draft,
+                    checkpoint=outcome.checkpoint,
+                    review_message=outcome.review_message,
+                    grounding=outcome.grounding,
+                )
+                return IntakeResult(
+                    status="needs_review",
+                    confirmation_id=confirmation_id,
+                    draft_proposal=outcome.draft,
+                    grounding=outcome.grounding,
+                    review_message=outcome.review_message,
+                )
+            case Approved():
+                return await self.finalize_approval(confirmation_id)
+            case Rejected():
+                self.store.mark_rejected(confirmation_id)
+                return IntakeResult(
+                    status=ConfirmationStatus.REJECTED.value,
+                    confirmation_id=confirmation_id,
+                    draft_proposal=outcome.draft,
+                )
+        raise RuntimeError(f"Unknown Turn outcome: {outcome!r}")
 
     async def finalize_approval(self, confirmation_id: str) -> IntakeResult:
         confirmation, acquired = self.store.mark_committing_once(confirmation_id)
@@ -402,44 +339,6 @@ class IntakeService:
             return None
         return await writer.find_project_by_source(source_url)
 
-    async def _run_turn(
-        self,
-        *,
-        user_id: str,
-        session_id: str,
-        message: types.Content,
-        invocation_id: str | None = None,
-        state_delta: dict[str, Any] | None = None,
-    ) -> list[Any]:
-        events: list[Any] = []
-        async for event in self.runner.run_async(
-            user_id=user_id,
-            session_id=session_id,
-            invocation_id=invocation_id,
-            new_message=message,
-            state_delta=state_delta,
-        ):
-            events.append(event)
-        return events
-
-    async def _get_session_state(
-        self,
-        *,
-        user_id: str,
-        session_id: str,
-    ) -> dict[str, Any]:
-        session = await self.session_service.get_session(
-            app_name=self.app_name,
-            user_id=user_id,
-            session_id=session_id,
-        )
-        if session is None:
-            raise RuntimeError(
-                "Session was not found after workflow execution: "
-                f"user_id={user_id}, session_id={session_id}",
-            )
-        return dict(session.state)
-
     async def _known_topics(self) -> list[str]:
         """The tag vocabulary already in Notion, for the drafting prompt.
 
@@ -452,114 +351,3 @@ class IntakeService:
         except Exception:
             logger.warning("Could not load the existing topic vocabulary.")
             return []
-
-    def _extract_grounding(
-        self,
-        session_state: dict[str, Any],
-        draft: ProjectDraft,
-    ) -> DraftGrounding:
-        """Summarise what fetch_url found, for the card and the Notion page."""
-        fetched = session_state.get(FETCHED_CONTEXT_STATE_KEY)
-        if not isinstance(fetched, dict) or not fetched:
-            return DraftGrounding(fetch_status="skipped")
-
-        payload = _match_fetched_entry(fetched, draft.source_url)
-        if not isinstance(payload, dict):
-            return DraftGrounding(fetch_status="skipped")
-
-        if payload.get("status") != "success":
-            return DraftGrounding(
-                fetch_status="error",
-                fetch_error=payload.get("error"),
-            )
-
-        key_points = [
-            str(point) for point in (payload.get("key_points") or []) if str(point)
-        ]
-        return DraftGrounding(
-            fetch_status="success",
-            site_name=payload.get("site_name"),
-            page_title=payload.get("title"),
-            canonical_url=payload.get("canonical_url") or payload.get("final_url"),
-            key_points=key_points[:MAX_GROUNDING_KEY_POINTS],
-        )
-
-    def _extract_draft_from_state(
-        self,
-        session_state: dict[str, Any],
-    ) -> ProjectDraft:
-        draft = self._try_extract_draft_from_state(session_state)
-        if draft is None:
-            raise RuntimeError("No draft_proposal found in session state.")
-        return draft
-
-    def _try_extract_draft_from_state(
-        self,
-        session_state: dict[str, Any],
-    ) -> ProjectDraft | None:
-        draft_payload = session_state.get("draft_proposal")
-        if draft_payload is None:
-            return None
-        # Name the default task after its subject before anyone sees the
-        # draft, so the review card, Telegram and Notion all agree.
-        return with_composed_task_names(ProjectDraft.model_validate(draft_payload))
-
-    def _extract_request_input(self, events: list[Any]) -> dict[str, str]:
-        interrupt = self._try_extract_request_input(events)
-        if interrupt is None:
-            raise RuntimeError("No review interrupt found in workflow events.")
-        return interrupt
-
-    def _try_extract_request_input(self, events: list[Any]) -> dict[str, str] | None:
-        for event in events:
-            if not event.content or not event.content.parts:
-                continue
-            function_call = getattr(event.content.parts[0], "function_call", None)
-            if function_call is None or function_call.name != REQUEST_INPUT_TOOL_NAME:
-                continue
-            message = function_call.args.get("message", "")
-            return {
-                "invocation_id": event.invocation_id,
-                "request_input_call_id": function_call.id,
-                "review_message": message,
-            }
-        return None
-
-    def _extract_route(self, events: list[Any]) -> str | None:
-        for event in events:
-            route = getattr(event.actions, "route", None)
-            if route:
-                return route
-        return None
-
-    def _build_review_response(self, call_id: str, reply_text: str) -> types.Content:
-        return types.Content(
-            role="user",
-            parts=[
-                types.Part(
-                    function_response=types.FunctionResponse(
-                        id=call_id,
-                        name=REQUEST_INPUT_TOOL_NAME,
-                        response={"value": reply_text},
-                    )
-                )
-            ],
-        )
-
-    def _get_root_agent(self):
-        global _LANGSMITH_CONFIGURED
-
-        if (
-            self.settings.langsmith_tracing
-            and self.settings.langsmith_api_key
-            and not _LANGSMITH_CONFIGURED
-        ):
-            self.settings.export_to_env()
-            from langsmith.integrations.google_adk import configure_google_adk
-
-            configure_google_adk()
-            _LANGSMITH_CONFIGURED = True
-
-        from backlog_tamer.agents.intake_triage.agent import root_agent
-
-        return root_agent
