@@ -38,6 +38,7 @@ from backlog_tamer.integrations.telegram.handlers import (
     DRAFT_ERROR_REPLY,
     INTAKE_SERVICE_KEY,
     REVIEW_ERROR_REPLY,
+    SUPERSEDED_NOTE,
     UNKNOWN_CONFIRMATION_REPLY,
     handle_callback,
     handle_message,
@@ -141,6 +142,20 @@ class FakeCallbackQuery:
         self.message.reply_markup = reply_markup
 
 
+class FakeBot:
+    """Edits a message by id, the way a handler reaches one it is not replying to."""
+
+    def __init__(self, chat: Chat):
+        self.chat = chat
+
+    async def edit_message_text(
+        self, text, chat_id, message_id, parse_mode=None, reply_markup=None
+    ):
+        assert chat_id == CHAT_ID
+        [message] = [m for m in self.chat.bot_messages if m.message_id == message_id]
+        await message.edit_text(text, reply_markup=reply_markup)
+
+
 class Chat:
     """One chat between the allowed user and the bot."""
 
@@ -161,6 +176,7 @@ class Chat:
                 ALLOWED_USER_ID_KEY: ALLOWED_USER_ID,
             },
             user_data={},
+            bot=FakeBot(self),
         )
         self.bot_messages: list[FakeMessage] = []
 
@@ -264,6 +280,36 @@ def test_revision_feedback_redrafts_and_names_what_changed(tmp_path: Path):
     assert (
         chat.workflow.calls[-1].args["feedback"] == "not urgent, and add a build task"
     )
+
+
+def test_a_revision_retires_the_card_it_started_from(tmp_path: Path):
+    chat = Chat(
+        tmp_path,
+        _needs_review(),
+        _needs_review(_draft(priority="Low"), turn=2),
+    )
+    chat.send_link()
+    card = chat.last
+    chat.press(card, "Revise")
+
+    chat.send("not urgent")
+
+    assert card.buttons == []
+    assert card.text.startswith(SUPERSEDED_NOTE)
+    assert "<b>LangGraph: build stateful multi-agent workflows</b>" in card.text
+    assert "🔺 High" in card.text
+    assert "🔻 Low ▸" in chat.last.buttons
+
+
+def test_empty_revision_feedback_leaves_the_card_waiting(tmp_path: Path):
+    chat = Chat(tmp_path, _needs_review())
+    chat.send_link()
+    card = chat.last
+    chat.press(card, "Revise")
+
+    chat.send("   ")
+
+    assert card.buttons == ["✕ Cancel revision"]
 
 
 def test_empty_revision_feedback_asks_again_and_keeps_waiting(tmp_path: Path):
@@ -520,13 +566,14 @@ def test_an_unexpected_failure_keeps_the_draft_open(tmp_path: Path):
     chat = Chat(tmp_path, _needs_review())  # nothing queued for the approval
     chat.send_link()
     card = chat.last
-    approve = card.callback_data("Approve")
 
-    chat.press_data(card, approve)
+    chat.press(card, "Approve")
 
-    assert card.text == REVIEW_ERROR_REPLY
+    assert card.text.startswith(REVIEW_ERROR_REPLY)
+    assert "<b>LangGraph: build stateful multi-agent workflows</b>" in card.text
+    assert "✅ Approve & save" in card.buttons
     chat.workflow.queue(Approved())
-    chat.press_data(card, approve)
+    chat.press(card, "Approve")
     assert card.text.startswith("✅ <b>Saved to Notion</b>")
 
 
@@ -538,7 +585,24 @@ def test_an_unexpected_refetch_failure_keeps_the_draft_open(tmp_path: Path):
 
     chat.press(card, "Retry fetch")
 
-    assert card.text == REVIEW_ERROR_REPLY
+    assert card.text.startswith(REVIEW_ERROR_REPLY)
+    assert "🔁 Retry fetch" in card.buttons
+    assert "✅ Approve & save" in card.buttons
+
+
+def test_an_unexpected_revision_failure_keeps_the_draft_open(tmp_path: Path):
+    chat = Chat(tmp_path, _needs_review())  # nothing queued for the Revision
+    chat.send_link()
+    chat.press(chat.last, "Revise")
+
+    chat.send("lower priority")
+
+    reply = chat.last
+    assert reply.text.startswith(REVIEW_ERROR_REPLY)
+    assert "📝 Revise with a note" in reply.buttons
+    chat.workflow.queue(Approved())
+    chat.press(reply, "Approve")
+    assert reply.text.startswith("✅ <b>Saved to Notion</b>")
 
 
 def test_another_user_cannot_press_the_buttons(tmp_path: Path):

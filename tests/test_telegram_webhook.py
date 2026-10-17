@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backlog_tamer.integrations.telegram.state import TelegramStateStore
+from sqlalchemy import create_engine, text
+
+from backlog_tamer.integrations.telegram.state import (
+    PendingRevision,
+    TelegramStateStore,
+)
 from backlog_tamer.integrations.telegram.webhook import (
     TELEGRAM_SECRET_HEADER,
     decode_json_body,
@@ -105,9 +110,49 @@ def test_telegram_state_store_persists_revision_and_dedupes_updates(tmp_path: Pa
         confirmation_id="confirmation-id",
     )
 
-    assert store.pop_awaiting_revision(user_id="42", chat_id="99") == "confirmation-id"
+    assert store.pop_awaiting_revision(user_id="42", chat_id="99") == (
+        PendingRevision("confirmation-id")
+    )
     assert store.pop_awaiting_revision(user_id="42", chat_id="99") is None
+
+    store.set_awaiting_revision(
+        user_id="42",
+        chat_id="99",
+        confirmation_id="confirmation-id",
+        card_message_id=7,
+    )
+    assert store.pop_awaiting_revision(user_id="42", chat_id="99") == (
+        PendingRevision("confirmation-id", card_message_id=7)
+    )
 
     assert store.record_update_once(123) is True
     assert store.record_update_once(123) is False
     assert store.has_processed_update(123) is True
+
+
+def test_telegram_state_store_adds_the_card_column_to_an_existing_table(
+    tmp_path: Path,
+):
+    database_url = f"sqlite:///{tmp_path / 'telegram.db'}"
+    with create_engine(database_url).begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE telegram_revision_states ("
+                "state_key VARCHAR(255) PRIMARY KEY, user_id VARCHAR(255) NOT NULL, "
+                "chat_id VARCHAR(255) NOT NULL, confirmation_id VARCHAR(64) NOT NULL, "
+                "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO telegram_revision_states VALUES "
+                "('42:99', '42', '99', 'waiting-id', "
+                "'2026-10-01 00:00:00', '2026-10-01 00:00:00')"
+            )
+        )
+
+    store = TelegramStateStore(database_url)
+
+    assert store.pop_awaiting_revision(user_id="42", chat_id="99") == (
+        PendingRevision("waiting-id")
+    )
