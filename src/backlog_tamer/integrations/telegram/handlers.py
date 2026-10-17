@@ -10,20 +10,15 @@ from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationStatus, IntakeResult
 
+from .callbacks import (
+    Action,
+    ConfirmationAction,
+    OpenPicker,
+    PickValue,
+    decode_callback,
+)
 from .parsing import build_incoming_context
 from .rendering import (
-    CALLBACK_ADD_TASK,
-    CALLBACK_APPROVE,
-    CALLBACK_BACK,
-    CALLBACK_CANCEL,
-    CALLBACK_EDIT,
-    CALLBACK_PICK,
-    CALLBACK_REFETCH,
-    CALLBACK_REJECT,
-    CALLBACK_RETRY,
-    CALLBACK_REVISE,
-    CALLBACK_UNDO,
-    DRAFT_FIELD_NAMES,
     REVISION_PLACEHOLDER,
     build_cancel_revision_keyboard,
     build_picker_keyboard,
@@ -99,25 +94,38 @@ async def handle_callback(
         await query.answer()
         return
 
-    try:
-        action, confirmation_id = query.data.split(":", 1)
-    except ValueError:
+    callback = decode_callback(query.data)
+    if callback is None:
         await query.answer()
         logger.warning("Malformed callback_data: %r", query.data)
         return
 
     # A callback query may only be answered once, so the toast goes here.
-    await query.answer(
-        text="Revision cancelled." if action == CALLBACK_CANCEL else None,
+    cancelled = (
+        isinstance(callback, ConfirmationAction) and callback.action is Action.CANCEL
     )
+    await query.answer(text="Revision cancelled." if cancelled else None)
 
     intake_service = _get_intake_service(context)
+    confirmation_id = callback.confirmation_id
 
-    if action in {CALLBACK_EDIT, CALLBACK_PICK, CALLBACK_BACK}:
-        await _handle_quick_edit(query, intake_service, action, confirmation_id)
+    if isinstance(callback, OpenPicker):
+        await query.edit_message_reply_markup(
+            reply_markup=build_picker_keyboard(callback.field, confirmation_id),
+        )
         return
 
-    if action == CALLBACK_REVISE:
+    if isinstance(callback, PickValue):
+        await _apply_quick_edit(query, intake_service, callback)
+        return
+
+    action = callback.action
+
+    if action == Action.BACK:
+        await _restore_review_keyboard(query, intake_service, confirmation_id)
+        return
+
+    if action == Action.REVISE:
         identity = state_identity_from_update(update)
         if identity is None:
             return
@@ -147,7 +155,7 @@ async def handle_callback(
         )
         return
 
-    if action == CALLBACK_CANCEL:
+    if action == Action.CANCEL:
         identity = state_identity_from_update(update)
         if identity is not None:
             user_id, chat_id = identity
@@ -155,39 +163,29 @@ async def handle_callback(
         await _restore_review_keyboard(query, intake_service, confirmation_id)
         return
 
-    if action == CALLBACK_REFETCH:
+    if action == Action.REFETCH:
         await _handle_refetch(query, intake_service, confirmation_id)
-        return
-
-    if action not in {
-        CALLBACK_APPROVE,
-        CALLBACK_REJECT,
-        CALLBACK_RETRY,
-        CALLBACK_UNDO,
-        CALLBACK_ADD_TASK,
-    }:
-        logger.warning("Unknown callback action: %r", action)
         return
 
     # Each of these edits the card first, which also drops the keyboard so the
     # button cannot be pressed twice while the write is in flight.
     pending_message = {
-        CALLBACK_APPROVE: SAVING_MESSAGE,
-        CALLBACK_RETRY: SAVING_MESSAGE,
-        CALLBACK_UNDO: UNDOING_MESSAGE,
-        CALLBACK_ADD_TASK: ADDING_TASK_MESSAGE,
+        Action.APPROVE: SAVING_MESSAGE,
+        Action.RETRY: SAVING_MESSAGE,
+        Action.UNDO: UNDOING_MESSAGE,
+        Action.ADD_TASK: ADDING_TASK_MESSAGE,
     }.get(action)
     if pending_message is not None:
         await query.edit_message_text(pending_message, parse_mode=ParseMode.HTML)
 
     try:
-        if action == CALLBACK_RETRY:
+        if action == Action.RETRY:
             result = await intake_service.finalize_approval(confirmation_id)
-        elif action == CALLBACK_UNDO:
+        elif action == Action.UNDO:
             result = await intake_service.undo_commit(confirmation_id)
-        elif action == CALLBACK_ADD_TASK:
+        elif action == Action.ADD_TASK:
             result = await intake_service.add_to_existing_project(confirmation_id)
-        elif action == CALLBACK_APPROVE:
+        elif action == Action.APPROVE:
             result = await intake_service.approve(confirmation_id)
         else:
             result = await intake_service.reject(confirmation_id)
@@ -237,40 +235,20 @@ async def _handle_refetch(
     await _show_draft(query.message, result)
 
 
-async def _handle_quick_edit(
+async def _apply_quick_edit(
     query,
     intake_service: IntakeService,
-    action: str,
-    payload: str,
+    pick: PickValue,
 ) -> None:
-    """Open a field picker, apply a pick, or go back — all without the agent."""
-    if action == CALLBACK_EDIT:
-        field_code, confirmation_id = payload.split(":", 1)
-        if field_code not in DRAFT_FIELD_NAMES:
-            logger.warning("Unknown quick-edit field: %r", field_code)
-            return
-        await query.edit_message_reply_markup(
-            reply_markup=build_picker_keyboard(field_code, confirmation_id),
-        )
-        return
-
-    if action == CALLBACK_BACK:
-        await _restore_review_keyboard(query, intake_service, payload)
-        return
-
-    field_code, value, confirmation_id = payload.split(":", 2)
-    if field_code not in DRAFT_FIELD_NAMES:
-        logger.warning("Unknown quick-edit field: %r", field_code)
-        return
-
+    """Set the picked value on the Draft without asking the agent."""
     try:
         review = intake_service.apply_quick_edit(
-            confirmation_id,
-            DRAFT_FIELD_NAMES[field_code],
-            value,
+            pick.confirmation_id,
+            pick.field,
+            pick.value,
         )
     except ValueError:
-        logger.warning("Quick edit rejected for confirmation %s", confirmation_id)
+        logger.warning("Quick edit rejected for confirmation %s", pick.confirmation_id)
         await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
         return
 

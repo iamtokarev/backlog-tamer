@@ -13,29 +13,13 @@ from backlog_tamer.agents.intake_triage.schemas import (
 )
 from backlog_tamer.application.models import ConfirmationStatus
 
-CALLBACK_APPROVE = "approve"
-CALLBACK_REVISE = "revise"
-CALLBACK_REJECT = "reject"
-CALLBACK_RETRY = "retry"
-CALLBACK_CANCEL = "cancel"
-CALLBACK_EDIT = "edit"
-CALLBACK_REFETCH = "refetch"
-CALLBACK_UNDO = "undo"
-CALLBACK_ADD_TASK = "addtask"
-CALLBACK_PICK = "pick"
-CALLBACK_BACK = "back"
-
-# Single-letter codes keep callback_data inside Telegram's 64-byte limit
-# once a 36-character confirmation id is appended.
-FIELD_PRIORITY = "p"
-FIELD_INTENT = "i"
-FIELD_TYPE = "t"
-
-DRAFT_FIELD_NAMES = {
-    FIELD_PRIORITY: "priority",
-    FIELD_INTENT: "intent",
-    FIELD_TYPE: "project_type",
-}
+from .callbacks import (
+    Action,
+    ConfirmationAction,
+    OpenPicker,
+    PickValue,
+    encode_callback,
+)
 
 REVISION_PLACEHOLDER = "What should change?"
 
@@ -66,16 +50,17 @@ PRIORITY_ICONS = {
     "Low": "🔻",
 }
 
+# The Draft fields a Quick edit can set, and the options each picker offers.
 FIELD_OPTIONS = {
-    FIELD_PRIORITY: ("High", "Medium", "Low"),
-    FIELD_INTENT: tuple(INTENT_ICONS),
-    FIELD_TYPE: tuple(PROJECT_TYPE_ICONS),
+    "priority": ("High", "Medium", "Low"),
+    "intent": tuple(INTENT_ICONS),
+    "project_type": tuple(PROJECT_TYPE_ICONS),
 }
 
 FIELD_ICONS = {
-    FIELD_PRIORITY: PRIORITY_ICONS,
-    FIELD_INTENT: INTENT_ICONS,
-    FIELD_TYPE: PROJECT_TYPE_ICONS,
+    "priority": PRIORITY_ICONS,
+    "intent": INTENT_ICONS,
+    "project_type": PROJECT_TYPE_ICONS,
 }
 
 
@@ -122,7 +107,9 @@ def build_cancel_revision_keyboard(confirmation_id: str) -> InlineKeyboardMarkup
             [
                 InlineKeyboardButton(
                     "✕ Cancel revision",
-                    callback_data=f"{CALLBACK_CANCEL}:{confirmation_id}",
+                    callback_data=encode_callback(
+                        ConfirmationAction(Action.CANCEL, confirmation_id)
+                    ),
                 )
             ]
         ]
@@ -212,7 +199,9 @@ def build_review_keyboard(
             [
                 InlineKeyboardButton(
                     "🔁 Retry fetch",
-                    callback_data=f"{CALLBACK_REFETCH}:{confirmation_id}",
+                    callback_data=encode_callback(
+                        ConfirmationAction(Action.REFETCH, confirmation_id)
+                    ),
                 )
             ]
         ]
@@ -222,32 +211,44 @@ def build_review_keyboard(
             [
                 InlineKeyboardButton(
                     "✅ Approve & save",
-                    callback_data=f"{CALLBACK_APPROVE}:{confirmation_id}",
+                    callback_data=encode_callback(
+                        ConfirmationAction(Action.APPROVE, confirmation_id)
+                    ),
                 ),
                 InlineKeyboardButton(
                     "❌ Reject",
-                    callback_data=f"{CALLBACK_REJECT}:{confirmation_id}",
+                    callback_data=encode_callback(
+                        ConfirmationAction(Action.REJECT, confirmation_id)
+                    ),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     f"{PRIORITY_ICONS.get(draft.priority, '▪️')} {draft.priority} ▸",
-                    callback_data=f"{CALLBACK_EDIT}:{FIELD_PRIORITY}:{confirmation_id}",
+                    callback_data=encode_callback(
+                        OpenPicker("priority", confirmation_id)
+                    ),
                 ),
                 InlineKeyboardButton(
                     f"{INTENT_ICONS.get(draft.intent, '❔')} {draft.intent} ▸",
-                    callback_data=f"{CALLBACK_EDIT}:{FIELD_INTENT}:{confirmation_id}",
+                    callback_data=encode_callback(
+                        OpenPicker("intent", confirmation_id)
+                    ),
                 ),
                 InlineKeyboardButton(
                     f"{PROJECT_TYPE_ICONS.get(draft.project_type, '❔')} "
                     f"{draft.project_type} ▸",
-                    callback_data=f"{CALLBACK_EDIT}:{FIELD_TYPE}:{confirmation_id}",
+                    callback_data=encode_callback(
+                        OpenPicker("project_type", confirmation_id)
+                    ),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     "📝 Revise with a note",
-                    callback_data=f"{CALLBACK_REVISE}:{confirmation_id}",
+                    callback_data=encode_callback(
+                        ConfirmationAction(Action.REVISE, confirmation_id)
+                    ),
                 ),
             ],
             *refetch_row,
@@ -256,16 +257,16 @@ def build_review_keyboard(
 
 
 def build_picker_keyboard(
-    field_code: str,
+    field: str,
     confirmation_id: str,
 ) -> InlineKeyboardMarkup:
     """Replace the review keyboard with the options for one field."""
-    options = FIELD_OPTIONS[field_code]
-    icons = FIELD_ICONS[field_code]
+    options = FIELD_OPTIONS[field]
+    icons = FIELD_ICONS[field]
     buttons = [
         InlineKeyboardButton(
             f"{icons.get(option, '❔')} {option}",
-            callback_data=f"{CALLBACK_PICK}:{field_code}:{option}:{confirmation_id}",
+            callback_data=encode_callback(PickValue(field, option, confirmation_id)),
         )
         for option in options
     ]
@@ -274,7 +275,9 @@ def build_picker_keyboard(
         [
             InlineKeyboardButton(
                 "↩︎ Back",
-                callback_data=f"{CALLBACK_BACK}:{confirmation_id}",
+                callback_data=encode_callback(
+                    ConfirmationAction(Action.BACK, confirmation_id)
+                ),
             )
         ]
     )
@@ -327,7 +330,9 @@ def build_terminal_keyboard(
                 [
                     InlineKeyboardButton(
                         "🔁 Retry save",
-                        callback_data=f"{CALLBACK_RETRY}:{confirmation_id}",
+                        callback_data=encode_callback(
+                            ConfirmationAction(Action.RETRY, confirmation_id)
+                        ),
                     )
                 ]
             ]
@@ -340,7 +345,9 @@ def build_terminal_keyboard(
                     InlineKeyboardButton("↗️ Open in Notion", url=notion_project_url),
                     InlineKeyboardButton(
                         "↩️ Undo",
-                        callback_data=f"{CALLBACK_UNDO}:{confirmation_id}",
+                        callback_data=encode_callback(
+                            ConfirmationAction(Action.UNDO, confirmation_id)
+                        ),
                     ),
                 ]
             ]
@@ -353,7 +360,9 @@ def build_terminal_keyboard(
                     InlineKeyboardButton("↗️ Open existing", url=notion_project_url),
                     InlineKeyboardButton(
                         "＋ Add task there",
-                        callback_data=f"{CALLBACK_ADD_TASK}:{confirmation_id}",
+                        callback_data=encode_callback(
+                            ConfirmationAction(Action.ADD_TASK, confirmation_id)
+                        ),
                     ),
                 ]
             ]
