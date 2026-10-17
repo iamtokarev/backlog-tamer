@@ -189,6 +189,31 @@ Revise the existing ProjectDraft using the latest human feedback.
 """.strip()
 
 
+KEPT_FIELDS_TEMPLATE = """
+I already corrected these fields myself, keep them exactly as they are: {fields}.
+
+{feedback}
+""".strip()
+
+REFETCH_FEEDBACK = (
+    "The page fetch failed last time. Fetch the source URL again and redraft "
+    "from what the page actually says."
+)
+
+
+def build_revision_feedback(feedback: str, kept_fields: dict[str, str]) -> str:
+    """Tell the agent which fields the user already fixed with the buttons.
+
+    Quick edits patch the stored Draft only; the workflow session still holds
+    the agent's own last draft, so without this the next Revision would
+    silently undo them.
+    """
+    if not kept_fields:
+        return feedback
+    fields = ", ".join(f"{field}={value}" for field, value in kept_fields.items())
+    return KEPT_FIELDS_TEMPLATE.format(fields=fields, feedback=feedback)
+
+
 def build_revision_prompt(
     *,
     draft_snapshot: str = "",

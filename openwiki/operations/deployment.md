@@ -38,7 +38,7 @@ timestamp: 2025-01-20T00:00:00Z
 Run the agent workflow without Telegram or database:
 
 ```sh
-uv run python -m backlog_tamer.dev.run_intake_workflow "some text" --link https://example.com --review-reply approve
+uv run python -m backlog_tamer.dev.run_intake_workflow "some text" --link https://example.com --approve
 ```
 
 Uses `InMemorySessionService` — no persistence needed. Useful for iterating on prompts and schemas.

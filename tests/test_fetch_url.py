@@ -275,7 +275,7 @@ def test_youtube_video_is_described_by_oembed(monkeypatch):
 
     monkeypatch.setattr(fetch_url, "_request_public_url", request)
 
-    result = fetch_url._fetch_url_cached.__wrapped__("https://youtu.be/L1OBRtfPS34")
+    result = fetch_url._fetch_fresh("https://youtu.be/L1OBRtfPS34")
 
     assert requested[0].startswith(fetch_url.YOUTUBE_OEMBED_ENDPOINT)
     assert result.status == "success"
@@ -300,7 +300,7 @@ def test_youtube_page_fallback_keeps_the_video_url(monkeypatch):
 
     monkeypatch.setattr(fetch_url, "_request_public_url", request)
 
-    result = fetch_url._fetch_url_cached.__wrapped__("https://youtu.be/L1OBRtfPS34")
+    result = fetch_url._fetch_fresh("https://youtu.be/L1OBRtfPS34")
 
     assert result.status == "success"
     assert result.canonical_url == "https://www.youtube.com/watch?v=L1OBRtfPS34"
@@ -322,3 +322,49 @@ def test_real_canonical_tag_is_kept(monkeypatch):
         fetch_url._extract_canonical_url(soup, "https://example.com/post/1?ref=x")
         == "https://example.com/post/1"
     )
+
+
+def test_failed_fetch_is_retried_on_the_next_call(monkeypatch):
+    """A warm Lambda kept serving a page's one-off 503 until the process died."""
+    _public_dns(monkeypatch)
+    url = "https://example.com/flaky-page"
+    responses = [
+        _response(url, 503, "text/html", ""),
+        _response(
+            url,
+            200,
+            "text/html",
+            "<html><head><title>Flaky page</title></head><body></body></html>",
+        ),
+    ]
+    monkeypatch.setattr(fetch_url, "_request_public_url", lambda _url: responses.pop(0))
+
+    first = fetch_url.fetch_url(url)
+    second = fetch_url.fetch_url(url)
+
+    assert first["status"] == "error"
+    assert second["status"] == "success"
+    assert second["title"] == "Flaky page"
+
+
+def test_successful_fetch_is_served_from_cache(monkeypatch):
+    _public_dns(monkeypatch)
+    url = "https://example.com/stable-page"
+    requested: list[str] = []
+
+    def request(requested_url):
+        requested.append(requested_url)
+        return _response(
+            url,
+            200,
+            "text/html",
+            "<html><head><title>Stable page</title></head><body></body></html>",
+        )
+
+    monkeypatch.setattr(fetch_url, "_request_public_url", request)
+
+    fetch_url.fetch_url(url)
+    second = fetch_url.fetch_url(url)
+
+    assert second["title"] == "Stable page"
+    assert requested == [url]

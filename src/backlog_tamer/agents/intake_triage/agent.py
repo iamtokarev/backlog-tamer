@@ -7,7 +7,7 @@ from backlog_tamer.config import AgentConfig, get_settings
 from .prompts import INTAKE_TRIAGE_INSTRUCTIONS
 from .schemas import ProjectDraft
 from .tools.fetch_url import fetch_url
-from .workflow import build_intake_workflow
+from .workflow import DRAFT_PROPOSAL_STATE_KEY, build_intake_workflow
 
 settings = get_settings()
 
@@ -32,7 +32,7 @@ draft_agent = Agent(
     description="Turns messy learning inputs into grounded triage drafts.",
     instruction=INTAKE_TRIAGE_INSTRUCTIONS,
     output_schema=ProjectDraft,
-    output_key="draft_proposal",
+    output_key=DRAFT_PROPOSAL_STATE_KEY,
     tools=[fetch_url],
 )
 

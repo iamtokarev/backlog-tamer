@@ -7,7 +7,6 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
-from backlog_tamer.agents.intake_triage.tools import fetch_url
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationStatus, IntakeResult
 
@@ -63,10 +62,6 @@ SAVING_MESSAGE = "⏳ Saving to Notion…"
 UNDOING_MESSAGE = "↩️ Removing it from Notion…"
 ADDING_TASK_MESSAGE = "＋ Adding the task to the existing project…"
 REFETCHING_MESSAGE = "🔎 Opening the page again…"
-REFETCH_FEEDBACK = (
-    "The page fetch failed last time. Fetch the source URL again and redraft "
-    "from what the page actually says."
-)
 
 
 async def handle_message(
@@ -157,17 +152,7 @@ async def handle_callback(
         if identity is not None:
             user_id, chat_id = identity
             get_session_revision(context, user_id=user_id, chat_id=chat_id)
-        record = intake_service.store.get(confirmation_id)
-        if record is None:
-            await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
-            return
-        await query.edit_message_reply_markup(
-            reply_markup=build_review_keyboard(
-                record.draft_proposal,
-                confirmation_id,
-                record.grounding,
-            ),
-        )
+        await _restore_review_keyboard(query, intake_service, confirmation_id)
         return
 
     if action == CALLBACK_REFETCH:
@@ -202,14 +187,16 @@ async def handle_callback(
             result = await intake_service.undo_commit(confirmation_id)
         elif action == CALLBACK_ADD_TASK:
             result = await intake_service.add_to_existing_project(confirmation_id)
+        elif action == CALLBACK_APPROVE:
+            result = await intake_service.approve(confirmation_id)
         else:
-            result = await intake_service.resume_intake(confirmation_id, action)
+            result = await intake_service.reject(confirmation_id)
     except ValueError:
-        logger.exception("resume_intake failed for confirmation %s", confirmation_id)
+        logger.exception("review action failed for confirmation %s", confirmation_id)
         await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
         return
     except Exception:
-        logger.exception("Unexpected resume_intake error")
+        logger.exception("Unexpected review action error")
         await query.edit_message_text(REVIEW_ERROR_REPLY)
         return
 
@@ -225,16 +212,11 @@ async def _handle_refetch(
     intake_service: IntakeService,
     confirmation_id: str,
 ) -> None:
-    """Ask the agent to open the page again after a failed fetch.
-
-    fetch_url memoises results, so the cached failure has to go first or the
-    retry would return it unchanged.
-    """
-    fetch_url.clear_cache()
+    """Ask the agent to open the page again after a failed fetch."""
     await query.edit_message_text(REFETCHING_MESSAGE, parse_mode=ParseMode.HTML)
 
     try:
-        result = await intake_service.resume_intake(confirmation_id, REFETCH_FEEDBACK)
+        result = await intake_service.refetch(confirmation_id)
     except ValueError:
         logger.exception("refetch failed for confirmation %s", confirmation_id)
         await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
@@ -273,18 +255,7 @@ async def _handle_quick_edit(
         return
 
     if action == CALLBACK_BACK:
-        confirmation_id = payload
-        record = intake_service.store.get(confirmation_id)
-        if record is None:
-            await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
-            return
-        await query.edit_message_reply_markup(
-            reply_markup=build_review_keyboard(
-                record.draft_proposal,
-                confirmation_id,
-                record.grounding,
-            ),
-        )
+        await _restore_review_keyboard(query, intake_service, payload)
         return
 
     field_code, value, confirmation_id = payload.split(":", 2)
@@ -293,10 +264,10 @@ async def _handle_quick_edit(
         return
 
     try:
-        record = intake_service.store.apply_manual_edit(
-            confirmation_id=confirmation_id,
-            field=DRAFT_FIELD_NAMES[field_code],
-            value=value,
+        review = intake_service.apply_quick_edit(
+            confirmation_id,
+            DRAFT_FIELD_NAMES[field_code],
+            value,
         )
     except ValueError:
         logger.warning("Quick edit rejected for confirmation %s", confirmation_id)
@@ -304,19 +275,29 @@ async def _handle_quick_edit(
         return
 
     await query.edit_message_text(
-        render_draft_message(record.draft_proposal, record.grounding),
+        render_draft_message(review.draft_proposal, review.grounding),
         parse_mode=ParseMode.HTML,
-        reply_markup=build_review_keyboard(
-            record.draft_proposal,
-            confirmation_id,
-            record.grounding,
-        ),
+        reply_markup=_review_keyboard(review),
+    )
+
+
+async def _restore_review_keyboard(
+    query,
+    intake_service: IntakeService,
+    confirmation_id: str,
+) -> None:
+    review = intake_service.get_review(confirmation_id)
+    if review is None:
+        await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
+        return
+    await query.edit_message_reply_markup(
+        reply_markup=_review_keyboard(review),
     )
 
 
 def _require_draft(intake_service: IntakeService, confirmation_id: str):
-    record = intake_service.store.get(confirmation_id)
-    return record.draft_proposal if record is not None else None
+    review = intake_service.get_review(confirmation_id)
+    return review.draft_proposal if review is not None else None
 
 
 async def _handle_new_intake(
@@ -384,13 +365,13 @@ async def _handle_revision_text(
     progress = await message.reply_text(REVISING_MESSAGE, parse_mode=ParseMode.HTML)
 
     try:
-        result = await intake_service.resume_intake(confirmation_id, feedback)
+        result = await intake_service.revise(confirmation_id, feedback)
     except ValueError:
-        logger.exception("resume_intake failed for confirmation %s", confirmation_id)
+        logger.exception("revision failed for confirmation %s", confirmation_id)
         await progress.edit_text(UNKNOWN_CONFIRMATION_REPLY)
         return
     except Exception:
-        logger.exception("Unexpected resume_intake error during revision")
+        logger.exception("Unexpected error during revision")
         await progress.edit_text(REVIEW_ERROR_REPLY)
         return
 
@@ -423,11 +404,15 @@ async def _show_draft(
     await progress_message.edit_text(
         card,
         parse_mode=ParseMode.HTML,
-        reply_markup=build_review_keyboard(
-            result.draft_proposal,
-            result.confirmation_id,
-            result.grounding,
-        ),
+        reply_markup=_review_keyboard(result),
+    )
+
+
+def _review_keyboard(review: IntakeResult):
+    return build_review_keyboard(
+        review.draft_proposal,
+        review.confirmation_id,
+        review.grounding,
     )
 
 

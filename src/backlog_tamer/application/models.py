@@ -10,6 +10,7 @@ from backlog_tamer.agents.intake_triage.schemas import (
     IncomingContext,
     ProjectDraft,
 )
+from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 
 
 class ConfirmationStatus(StrEnum):
@@ -51,9 +52,9 @@ class ConfirmationRecord(BaseModel):
     user_id: str
     chat_id: str | None = None
     source_message_id: str | None = None
-    session_id: str
-    invocation_id: str
-    request_input_call_id: str
+    # Opaque to the intake logic, which only hands it back to TriageWorkflow;
+    # the store maps it onto the existing session/invocation/call-id columns.
+    checkpoint: Checkpoint
     status: ConfirmationStatus
     incoming_context: IncomingContext
     draft_proposal: ProjectDraft
@@ -86,6 +87,11 @@ class ConfirmationRecord(BaseModel):
             for field, edit in self.manual_edits.items()
             if edit.before and edit.before != edit.after
         }
+
+    @property
+    def kept_fields(self) -> dict[str, str]:
+        """Quick edits the next Revision must not undo."""
+        return {field: edit.after for field, edit in self.manual_edits.items()}
 
 
 class IntakeResult(BaseModel):

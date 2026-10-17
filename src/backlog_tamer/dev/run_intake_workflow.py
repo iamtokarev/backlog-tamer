@@ -2,22 +2,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from typing import Any
 
-from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
-from google.genai import types
 
 from backlog_tamer.agents.intake_triage.schemas import IncomingContext, SourceLink
-from backlog_tamer.agents.intake_triage.workflow import (
-    build_triage_message,
-    build_triage_state_delta,
+from backlog_tamer.agents.intake_triage.triage_workflow import (
+    Approved,
+    NeedsReview,
+    Rejected,
+    TriageWorkflow,
+    TurnOutcome,
 )
 from backlog_tamer.config import get_settings
 
-APP_NAME = "backlog_tamer"
 USER_ID = "dev_user"
-SESSION_ID = "dev_session"
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,20 +38,27 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Attach one or more public URLs. Repeat the flag for multiple links.",
     )
-    parser.add_argument(
-        "--review-reply",
+    review = parser.add_mutually_exclusive_group()
+    review.add_argument(
+        "--approve",
+        action="store_true",
+        help="Approve the first draft instead of prompting.",
+    )
+    review.add_argument(
+        "--reject",
+        action="store_true",
+        help="Reject the first draft instead of prompting.",
+    )
+    review.add_argument(
+        "--revise",
         default=None,
-        help="Optional review response to auto-resume the interrupt.",
+        metavar="FEEDBACK",
+        help="Send one Revision with this feedback instead of prompting.",
     )
     parser.add_argument(
         "--user-id",
         default=USER_ID,
         help="Runner user id for the local session.",
-    )
-    parser.add_argument(
-        "--session-id",
-        default=SESSION_ID,
-        help="Runner session id for the local session.",
     )
     return parser.parse_args()
 
@@ -66,151 +71,58 @@ def build_context(args: argparse.Namespace) -> IncomingContext:
     )
 
 
-def render_event(event: Any) -> None:
-    path = event.node_info.path if event.node_info else "unknown"
-    print(f"\n[{path}]")
-
-    if event.error_code or event.error_message:
-        print(f"ERROR: {event.error_code} {event.error_message}")
-        return
-
-    if not event.content or not event.content.parts:
-        print(event)
-        return
-
-    for part in event.content.parts:
-        function_call = getattr(part, "function_call", None)
-        if function_call is not None:
-            print(f"Function call: {function_call.name}")
-            print(f"Call id: {function_call.id}")
-            print(f"Args: {function_call.args}")
-            continue
-
-        function_response = getattr(part, "function_response", None)
-        if function_response is not None:
-            print(f"Function response: {function_response.name}")
-            print(f"Call id: {function_response.id}")
-            print(f"Response: {function_response.response}")
-            continue
-
-        text = getattr(part, "text", None)
-        if text:
-            print(text)
+def render_outcome(outcome: TurnOutcome) -> None:
+    match outcome:
+        case NeedsReview():
+            print(f"\n{outcome.review_message}")
+            print(f"\nGrounding: {outcome.grounding.model_dump_json()}")
+        case Approved():
+            print("\nApproved.")
+        case Rejected(draft=None):
+            print("\nRejected.")
+        case Rejected():
+            print(f"\nRejected: {outcome.draft.project_name}")
 
 
-def extract_request_input_handles(events: list[Any]) -> dict[str, str]:
-    interrupt_event = next(
-        event
-        for event in events
-        if event.content
-        and event.content.parts
-        and getattr(event.content.parts[0], "function_call", None)
-        and event.content.parts[0].function_call.name == "adk_request_input"
-    )
+async def decide(
+    workflow: TriageWorkflow,
+    outcome: NeedsReview,
+    args: argparse.Namespace,
+) -> TurnOutcome | None:
+    if args.approve:
+        return await workflow.approve(outcome.checkpoint)
+    if args.reject:
+        return await workflow.reject(outcome.checkpoint)
+    if args.revise is not None:
+        return await workflow.revise(outcome.checkpoint, args.revise, {})
 
-    function_call = interrupt_event.content.parts[0].function_call
-    return {
-        "invocation_id": interrupt_event.invocation_id,
-        "request_input_call_id": function_call.id,
-    }
-
-
-async def run_turn(
-    runner: Runner,
-    *,
-    user_id: str,
-    session_id: str,
-    message: types.Content,
-    invocation_id: str | None = None,
-    state_delta: dict[str, Any] | None = None,
-) -> list[Any]:
-    events: list[Any] = []
-    async for event in runner.run_async(
-        user_id=user_id,
-        session_id=session_id,
-        invocation_id=invocation_id,
-        new_message=message,
-        state_delta=state_delta,
-    ):
-        events.append(event)
-        render_event(event)
-    return events
-
-
-def build_review_response(call_id: str, reply_text: str) -> types.Content:
-    return types.Content(
-        role="user",
-        parts=[
-            types.Part(
-                function_response=types.FunctionResponse(
-                    id=call_id,
-                    name="adk_request_input",
-                    response={"value": reply_text},
-                )
-            )
-        ],
-    )
+    choice = input("\n[a]pprove, [r]eject, or type revision feedback: ").strip()
+    if not choice:
+        return None
+    if choice.lower() in {"a", "approve"}:
+        return await workflow.approve(outcome.checkpoint)
+    if choice.lower() in {"r", "reject"}:
+        return await workflow.reject(outcome.checkpoint)
+    return await workflow.revise(outcome.checkpoint, choice, {})
 
 
 async def main() -> None:
     args = parse_args()
-    settings = get_settings()
-
-    from langsmith.integrations.google_adk import configure_google_adk
-
-    from backlog_tamer.agents.intake_triage.agent import root_agent
-
-    if settings.langsmith_tracing:
-        configure_google_adk()
-
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=root_agent,
-        app_name=APP_NAME,
-        session_service=session_service,
+    workflow = TriageWorkflow.from_settings(
+        get_settings(),
+        session_service=InMemorySessionService(),
     )
+    outcome = await workflow.start(build_context(args), args.user_id, [])
+    render_outcome(outcome)
 
-    await session_service.create_session(
-        app_name=APP_NAME,
-        user_id=args.user_id,
-        session_id=args.session_id,
-    )
-
-    context = build_context(args)
-    first_message = build_triage_message(context)
-    first_events = await run_turn(
-        runner,
-        user_id=args.user_id,
-        session_id=args.session_id,
-        message=first_message,
-        state_delta=build_triage_state_delta(context),
-    )
-
-    try:
-        handles = extract_request_input_handles(first_events)
-    except StopIteration:
-        print("\nNo review interrupt was emitted.")
+    if not isinstance(outcome, NeedsReview):
         return
 
-    review_reply = args.review_reply
-    if review_reply is None:
-        review_reply = input("\nReview reply: ").strip()
-
-    if not review_reply:
-        print("\nNo review reply provided. Leaving the workflow paused.")
+    next_outcome = await decide(workflow, outcome, args)
+    if next_outcome is None:
+        print("\nNo review decision provided. Leaving the workflow paused.")
         return
-
-    review_message = build_review_response(
-        handles["request_input_call_id"],
-        review_reply,
-    )
-    await run_turn(
-        runner,
-        user_id=args.user_id,
-        session_id=args.session_id,
-        invocation_id=handles["invocation_id"],
-        message=review_message,
-    )
+    render_outcome(next_outcome)
 
 
 if __name__ == "__main__":
