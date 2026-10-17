@@ -13,6 +13,8 @@ timestamp: 2025-01-20T00:00:00Z
 
 The intake workflow is the core product loop. It takes a raw Telegram message, runs it through an AI agent that produces a structured draft, pauses for human review, and either commits the draft to Notion, rejects it, or loops back for revision.
 
+The flow is split across two components: `TriageWorkflow` (`triage_workflow.py`) owns the ADK `Runner` and session service and exposes a typed `TurnOutcome` per turn; `IntakeService` (`intake_service.py`) drives the triage workflow, persists confirmation state, and writes approved drafts to Notion. `IntakeService` never inspects ADK events — it only sees `NeedsReview`, `Approved`, or `Rejected`.
+
 ## ADK Workflow Graph
 
 The workflow is defined in `src/backlog_tamer/agents/intake_triage/workflow.py` using Google ADK's `Workflow` class. The graph has three node types and three routes:
@@ -57,13 +59,14 @@ flowchart TD
 
 ## End-to-End Request Flow
 
-The `IntakeService` (`src/backlog_tamer/application/intake_service.py`) orchestrates the workflow across multiple interactions. Before drafting, `start_intake` loads the workspace's existing Notion tag vocabulary via `IntakeService._known_topics()` → `NotionWriter.list_tag_options()` and passes it as `known_topics` into `build_triage_prompt`, so the agent reuses an existing tag spelling instead of minting a near-duplicate. The tag lookup is best-effort and never blocks a capture if Notion is unreachable.
+`IntakeService` (`src/backlog_tamer/application/intake_service.py`) orchestrates the flow across multiple interactions by delegating each turn to `TriageWorkflow`. Before drafting, `start_intake` loads the workspace's existing Notion tag vocabulary via `IntakeService._known_topics()` → `NotionWriter.list_tag_options()` and passes it as `known_topics` into `TriageWorkflow.start`, so the agent reuses an existing tag spelling instead of minting a near-duplicate. The tag lookup is best-effort and never blocks a capture if Notion is unreachable.
 
 ```mermaid
 sequenceDiagram
     participant U as User (Telegram)
     participant H as handlers.py
     participant IS as IntakeService
+    participant TW as TriageWorkflow
     participant R as ADK Runner
     participant SS as DatabaseSessionService
     participant CS as ConfirmationStore
@@ -71,22 +74,26 @@ sequenceDiagram
 
     U->>H: sends message (link/note)
     H->>IS: start_intake(context)
-    IS->>SS: create_session()
-    IS->>R: run_async(message, state_delta)
+    IS->>TW: start(context, known_topics)
+    TW->>SS: create_session()
+    TW->>R: run_async(message, state_delta)
     R->>R: draft_agent produces ProjectDraft
     R->>R: request_human_review emits RequestInput
-    R-->>IS: events (includes interrupt)
-    IS->>SS: get_session() → extract draft
+    R-->>TW: events (includes interrupt)
+    TW->>SS: get_session() → extract draft
+    TW-->>IS: NeedsReview(draft, checkpoint, grounding)
     IS->>CS: create_pending(ConfirmationRecord)
     IS-->>H: IntakeResult(needs_review)
     H-->>U: draft message + Approve/Revise/Reject buttons
 
     U->>H: taps "Approve" (callback)
-    H->>IS: resume_intake(confirmation_id, "approve")
+    H->>IS: approve(confirmation_id)
     IS->>CS: get(confirmation_id)
-    IS->>R: run_async(review_reply, invocation_id)
+    IS->>TW: approve(checkpoint)
+    TW->>R: run_async(review_reply, invocation_id)
     R->>R: handle_human_review routes to "approved"
-    R-->>IS: events (route=approved)
+    R-->>TW: events (route=approved)
+    TW-->>IS: Approved
     IS->>IS: finalize_approval(confirmation_id)
     IS->>CS: mark_committing_once() → acquired
     IS->>NW: find_project_by_source(source_url)
@@ -105,25 +112,23 @@ sequenceDiagram
 
 ### Revision Flow
 
-When the user taps "Revise", `handlers.py` stores the `confirmation_id` in `TelegramStateStore` and prompts the user to send free-text feedback. When the user sends a text message, `handle_message` detects the pending revision and calls `resume_intake` with the feedback text. The workflow routes to `revise`, which builds a revision prompt and loops back to `draft_agent`. The agent re-runs, produces a new `ProjectDraft`, and `request_human_review` emits a new interrupt — starting the review cycle again.
-
-If the user has made any quick-edit button changes before revising, `_with_manual_edits` prepends them to the review reply so the agent preserves those corrections instead of undoing them.
+When the user taps "Revise", `handlers.py` stores the `confirmation_id` in `TelegramStateStore` and prompts the user to send free-text feedback. When the user sends a text message, `handle_message` detects the pending revision and calls `IntakeService.revise` with the feedback text. `IntakeService.revise` delegates to `TriageWorkflow.revise`, which resumes the paused turn with the feedback and the user's `kept_fields`. The workflow routes to `revise`, builds a revision prompt (with `build_revision_feedback` prepending the kept quick-edit fields), and loops back to `draft_agent`. The agent re-runs, produces a new `ProjectDraft`, and `request_human_review` emits a new interrupt — starting the review cycle again with a fresh `Checkpoint`.
 
 ### Quick Edits (No Agent Re-run)
 
-The user can change priority, intent, or project type directly from the review keyboard without re-running the agent. Tapping a field button (`edit:p:{id}`, `edit:i:{id}`, `edit:t:{id}`) swaps the keyboard for a picker of options. Picking an option calls `ConfirmationStore.apply_manual_edit`, which patches the stored draft in place and records the change in `manual_edits` as a `ManualEdit(before=..., after=...)` pair. The `before` value is the agent's original answer and is kept stable across repeated taps on the same field, so a correction stays measurable. The review card re-renders with the updated value.
+The user can change priority, intent, or project type directly from the review keyboard without re-running the agent. Tapping a field button (`edit:p:{id}`, `edit:i:{id}`, `edit:t:{id}`) swaps the keyboard for a picker of options. Picking an option calls `IntakeService.apply_quick_edit` → `ConfirmationStore.apply_manual_edit`, which patches the stored draft in place and records the change in `manual_edits` as a `ManualEdit(before=..., after=...)` pair. The `before` value is the agent's original answer and is kept stable across repeated taps on the same field, so a correction stays measurable. The review card re-renders with the updated value.
 
 A legacy `resource_type` value picked on an in-flight draft is normalized to the new `project_type` vocabulary through `LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE`, and rows persisted under the old `resource_type` key are migrated to `project_type` on load.
 
 ### Task Name Composition
 
-Before the draft is shown to anyone, `IntakeService._try_extract_draft_from_state` runs `with_composed_task_names` (in `src/backlog_tamer/agents/intake_triage/task_names.py`) so the review card, Telegram, and Notion all show the same task names. The default task — a single task carrying only a bare verb like `"Read"` or `"Explore"` — is rewritten to `"<verb>: <short_name>"`. The verb is a mechanical function of intent (`learn`→Read, `explore`→Explore, `build`→Build, `research`→Research, `reference`→"Skim and file", `unclear`→Explore), overridden by project type (`course`→"Work through", `video`→Watch). The subject is `draft.effective_short_name`.
+Before the draft is shown to anyone, `TriageWorkflow._draft_from_state` runs `with_composed_task_names` (in `src/backlog_tamer/agents/intake_triage/task_names.py`) so the review card, Telegram, and Notion all show the same task names. The default task — a single task carrying only a bare verb like `"Read"` or `"Explore"` — is rewritten to `"<verb>: <short_name>"`. The verb is a mechanical function of intent (`learn`→Read, `explore`→Explore, `build`→Build, `research`→Research, `reference`→"Skim and file", `unclear`→Explore), overridden by project type (`course`→"Work through", `video`→Watch). The subject is `draft.effective_short_name`.
 
 The rewrite is idempotent and narrow by design: a name that already reads `"<verb>: <subject>"` is returned unchanged, multi-task breakdowns are left alone, and authored names (anything not a bare verb) are never overwritten. This moved task naming out of the prompt — where the same rule had produced `"Explore"` for one course and `"Read"` for another — into deterministic code.
 
 ### Refetch After Failed Page Fetch
 
-When the fetch tool fails, the review card shows a warning and a "Retry fetch" button. Tapping it clears the `fetch_url` cache (so the cached failure is not returned again) and re-runs `resume_intake` with a "fetch the source URL again" instruction, producing a new draft from fresh page content.
+When the fetch tool fails, the review card shows a warning and a "Retry fetch" button. Tapping it calls `IntakeService.refetch`, which delegates to `TriageWorkflow.refetch`. That clears the `fetch_url` cache (so the cached failure is not returned again) and resumes the paused turn with `REFETCH_FEEDBACK`, producing a new draft from fresh page content.
 
 ### Duplicate Detection
 
@@ -135,7 +140,7 @@ After a successful commit, the user can tap "Undo" to archive the Notion pages (
 
 ### Correction Signal at Approval
 
-`finalize_approval` calls `IntakeService._log_corrections`, which emits one structured `intake_correction` log line per approval listing each field where the user moved the agent off its answer (`{field: {agent: before, user: after}}`). Quick edits run no model and emit no trace, so without this line a week of hand-corrections reads as a clean approval rate. The signal comes from `ConfirmationRecord.corrected_fields`, the subset of `manual_edits` where `before` is non-empty and differs from `after`.
+`finalize_approval` calls `_log_corrections`, which emits one structured `intake_correction` log line per approval listing each field where the user moved the agent off its answer (`{field: {agent: before, user: after}}`). Quick edits run no model and emit no trace, so without this line a week of hand-corrections reads as a clean approval rate. The signal comes from `ConfirmationRecord.corrected_fields`, the subset of `manual_edits` where `before` is non-empty and differs from `after`.
 
 ### Failed Save and Retry
 
@@ -150,7 +155,7 @@ stateDiagram-v2
     [*] --> PENDING_REVIEW: create_pending
     PENDING_REVIEW --> COMMITTING: mark_committing_once (acquired)
     PENDING_REVIEW --> REJECTED: mark_rejected
-    PENDING_REVIEW --> PENDING_REVIEW: resume_intake (revise → new draft)
+    PENDING_REVIEW --> PENDING_REVIEW: revise (new draft via new Checkpoint)
     COMMITTING --> COMMITTED: mark_committed (Notion write success)
     COMMITTING --> DUPLICATE: mark_duplicate (source URL exists)
     COMMITTING --> FAILED: mark_failed (Notion write error)
@@ -171,16 +176,17 @@ stateDiagram-v2
 
 ## Dev Workflow Runner
 
-`src/backlog_tamer/dev/run_intake_workflow.py` runs the ADK workflow standalone with `InMemorySessionService`, without Telegram or database persistence. It accepts raw text, notes, and links as CLI arguments, and can optionally auto-resume the review interrupt with a `--review-reply` flag. This is useful for iterating on prompts and schemas without setting up the full stack.
+`src/backlog_tamer/dev/run_intake_workflow.py` runs the `TriageWorkflow` standalone with `InMemorySessionService`, without Telegram or database persistence. It accepts raw text, notes, and links as CLI arguments, and can optionally auto-resume the review interrupt with `--approve`, `--reject`, or `--revise FEEDBACK` flags. This is useful for iterating on prompts and schemas without setting up the full stack.
 
 ## Source References
 
 | File | Purpose |
 |------|---------|
+| `src/backlog_tamer/agents/intake_triage/triage_workflow.py` | `TriageWorkflow`, `Checkpoint`, `TurnOutcome` (`NeedsReview`/`Approved`/`Rejected`); ADK `Runner` + session orchestration |
 | `src/backlog_tamer/agents/intake_triage/workflow.py` | ADK workflow graph, node functions, state keys; `build_triage_message`/`build_triage_state_delta` thread `known_topics` |
-| `src/backlog_tamer/agents/intake_triage/prompts.py` | All prompt templates and builders; `build_triage_prompt` injects the existing tag vocabulary (`MAX_KNOWN_TOPICS`) |
+| `src/backlog_tamer/agents/intake_triage/prompts.py` | All prompt templates and builders; `build_triage_prompt` injects the existing tag vocabulary (`MAX_KNOWN_TOPICS`); `REFETCH_FEEDBACK`, `build_revision_feedback` |
 | `src/backlog_tamer/agents/intake_triage/task_names.py` | `compose_task_names`, `with_composed_task_names` — default task naming |
-| `src/backlog_tamer/application/intake_service.py` | `start_intake`, `resume_intake`, `finalize_approval`, `undo_commit`, `add_to_existing_project`, `_known_topics`, `_log_corrections` |
+| `src/backlog_tamer/application/intake_service.py` | `start_intake`, `approve`, `reject`, `revise`, `refetch`, `finalize_approval`, `undo_commit`, `add_to_existing_project`, `_known_topics`, `_log_corrections` |
 | `src/backlog_tamer/application/confirmation_store.py` | `mark_committing_once` and all status transitions |
 | `src/backlog_tamer/application/models.py` | `ConfirmationStatus` enum |
 | `src/backlog_tamer/dev/run_intake_workflow.py` | Standable workflow runner for dev |

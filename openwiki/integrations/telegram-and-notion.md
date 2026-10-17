@@ -38,8 +38,8 @@ All three entry points build the same `python-telegram-bot` `Application` via `b
 
 - **`handle_message`** — processes text/caption messages from the allowed user. If a revision is pending for this chat (checked via `TelegramStateStore`), routes the text as revision feedback. Otherwise, calls `IntakeService.start_intake` with an `IncomingContext` parsed from the message. Shows a progress message while the agent works.
 - **`handle_callback`** — processes inline-keyboard callbacks. Beyond the original `approve`/`revise`/`reject`, it now handles:
-  - **Quick edits** (`edit`, `pick`, `back`) — opens a field picker, applies a one-tap change to priority/intent/project type without re-running the agent, or returns to the review keyboard. Calls `ConfirmationStore.apply_manual_edit` directly.
-  - **Refetch** (`refetch`) — clears the fetch_url cache and re-runs the agent with a "fetch again" instruction, for when the original page fetch failed.
+  - **Quick edits** (`edit`, `pick`, `back`) — opens a field picker, applies a one-tap change to priority/intent/project type without re-running the agent, or returns to the review keyboard. Calls `IntakeService.apply_quick_edit` (which delegates to `ConfirmationStore.apply_manual_edit`).
+  - **Refetch** (`refetch`) — clears the fetch_url cache and re-runs the agent with a "fetch again" instruction via `IntakeService.refetch`, for when the original page fetch failed.
   - **Retry** (`retry`) — re-attempts the Notion write after a FAILED status.
   - **Undo** (`undo`) — archives the Notion pages created by a committed confirmation via `IntakeService.undo_commit`.
   - **Add task** (`addtask`) — attaches this draft's tasks to an existing duplicate project via `IntakeService.add_to_existing_project`.
@@ -175,5 +175,5 @@ uv run python scripts/migrate_notion_schema.py --apply     # add columns + backf
 | `src/backlog_tamer/integrations/telegram/rendering.py` | HTML rendering, inline keyboards, picker keyboards, terminal keyboards |
 | `src/backlog_tamer/integrations/telegram/state.py` | `TelegramStateStore` (revision tracking, update dedup) |
 | `src/backlog_tamer/integrations/notion/writer.py` | `NotionWriter` |
-| `src/backlog_tamer/agents/intake_triage/tools/fetch_url.py` | `missing_optional_dependencies()` used by Lambda healthcheck; `strip_tracking_params` reused by the migration script |
+| `src/backlog_tamer/agents/intake_triage/tools/fetch_url.py` | `missing_optional_dependencies()` used by Lambda healthcheck; `strip_tracking_params` reused by the migration script; `youtube_watch_url` normalizes all YouTube link variants to a single watch URL so the canonical URL is not `youtube.com/undefined` |
 | `scripts/migrate_notion_schema.py` | One-time Notion schema migration: add optional columns and backfill them |

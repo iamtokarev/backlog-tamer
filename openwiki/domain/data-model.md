@@ -122,21 +122,21 @@ The full state of an intake item, persisted in the `confirmations` table.
 | `user_id` | `str` | Telegram user ID |
 | `chat_id` | `str \| None` | Telegram chat ID |
 | `source_message_id` | `str \| None` | Telegram message ID |
-| `session_id` | `str` | ADK session ID |
-| `invocation_id` | `str` | ADK invocation ID (for resume) |
-| `request_input_call_id` | `str` | ADK function call ID (for resume) |
+| `checkpoint` | `Checkpoint` | Opaque resume coordinates (session_id, invocation_id, request_input_call_id) handed back to `TriageWorkflow`; the store maps this onto its own `session_id`/`invocation_id`/`request_input_call_id` columns |
 | `status` | `ConfirmationStatus` | Current lifecycle state |
 | `incoming_context` | `IncomingContext` | Original user input |
 | `draft_proposal` | `ProjectDraft` | Latest draft |
+| `review_message` | `str` | Human-readable review prompt |
 | `grounding` | `DraftGrounding` | What the fetch tool learned (fetch status, key points, etc.) |
 | `manual_edits` | `dict[str, ManualEdit]` | Fields the user changed via inline keyboard pickers, as before/after pairs; replayed into revision so the agent does not undo them. Loads legacy `dict[str, str]` rows via `ManualEdit.coerce` |
-| `review_message` | `str` | Human-readable review prompt |
 | `created_at`, `updated_at` | `datetime` | Timestamps |
 | `resolved_at` | `datetime \| None` | Set when terminal |
 | `notion_project_id` | `str \| None` | Notion page ID after commit |
 | `notion_project_url` | `str \| None` | Notion page URL after commit |
 | `notion_task_ids` | `list[str]` | Notion task page IDs after commit |
 | `failure_reason` | `str \| None` | Error details if FAILED |
+
+The `kept_fields` property returns `{field: edit.after}` for all manual edits — the quick edits the next revision must preserve. `TriageWorkflow.revise` receives these so the revision feedback (`build_revision_feedback`) prepends them to the user's free-text feedback.
 
 ### IntakeResult
 
@@ -261,6 +261,7 @@ Created in the tasks database for each entry in `draft.tasks`:
 | File | Purpose |
 |------|---------|
 | `src/backlog_tamer/agents/intake_triage/schemas.py` | `IncomingContext`, `ProjectDraft` (with `short_name`, `effective_short_name`, `migrate_legacy_resource_type`), `FetchedUrl`, `DraftGrounding`, `SourceLink`, `ReviewDecision` |
+| `src/backlog_tamer/agents/intake_triage/triage_workflow.py` | `Checkpoint` (opaque resume coordinates stored on `ConfirmationRecord`), `TurnOutcome` |
 | `src/backlog_tamer/agents/intake_triage/task_names.py` | Default task name composition (`compose_task_names`, `with_composed_task_names`) |
 | `src/backlog_tamer/application/models.py` | `ConfirmationRecord`, `ConfirmationStatus`, `ManualEdit`, `IntakeResult` |
 | `src/backlog_tamer/application/confirmation_store.py` | `ConfirmationRow` ORM, `confirmations` table |

@@ -1,6 +1,6 @@
 # Put the ADK workflow behind one seam
 
-Status: ready-for-agent
+Status: resolved
 
 Terms follow `GLOSSARY.md` (Triage turn, Turn outcome, Checkpoint, Quick edit, Revision).
 
