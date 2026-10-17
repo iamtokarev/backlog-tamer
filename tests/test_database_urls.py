@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.pool import NullPool
 
-from backlog_tamer.application.database_urls import (
+from backlog_tamer.database_urls import (
     async_engine_options,
     to_adk_session_database_url,
     to_sync_database_url,

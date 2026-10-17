@@ -16,24 +16,22 @@ from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, DatabaseSessionService
 from google.genai import types
 
-from backlog_tamer.application.database_urls import (
+from backlog_tamer.config import Settings
+from backlog_tamer.database_urls import (
     async_engine_options,
     to_adk_session_database_url,
 )
-from backlog_tamer.config import Settings
 
 from .prompts import REFETCH_FEEDBACK, build_revision_feedback
 from .schemas import DraftGrounding, IncomingContext, ProjectDraft
 from .task_names import with_composed_task_names
 from .tools import fetch_url
 from .workflow import (
-    DECISION_APPROVE,
-    DECISION_REJECT,
-    DECISION_REVISE,
     DRAFT_PROPOSAL_STATE_KEY,
     FETCHED_CONTEXT_STATE_KEY,
     ROUTE_APPROVED,
     ROUTE_REJECTED,
+    ReviewDecision,
     build_review_reply,
     build_triage_message,
     build_triage_state_delta,
@@ -77,18 +75,11 @@ TurnOutcome = NeedsReview | Approved | Rejected
 
 
 class TriageWorkflow:
-    def __init__(
-        self,
-        graph: Any,
-        session_service: BaseSessionService,
-        *,
-        app_name: str = APP_NAME,
-    ):
+    def __init__(self, graph: Any, session_service: BaseSessionService):
         self._session_service = session_service
-        self._app_name = app_name
         self._runner = Runner(
             agent=graph,
-            app_name=app_name,
+            app_name=APP_NAME,
             session_service=session_service,
         )
 
@@ -124,7 +115,7 @@ class TriageWorkflow:
     ) -> TurnOutcome:
         session_id = str(uuid4())
         await self._session_service.create_session(
-            app_name=self._app_name,
+            app_name=APP_NAME,
             user_id=user_id,
             session_id=session_id,
         )
@@ -145,7 +136,7 @@ class TriageWorkflow:
         return await self._resume(
             checkpoint,
             build_review_reply(
-                DECISION_REVISE,
+                ReviewDecision.REVISE,
                 build_revision_feedback(feedback, kept_fields),
             ),
         )
@@ -153,7 +144,7 @@ class TriageWorkflow:
     async def refetch(
         self,
         checkpoint: Checkpoint,
-        kept_fields: dict[str, str] | None = None,
+        kept_fields: dict[str, str],
     ) -> TurnOutcome:
         """Redraft from a fresh read of the source page.
 
@@ -161,13 +152,15 @@ class TriageWorkflow:
         page it already read instead of reaching the site again.
         """
         fetch_url.clear_cache()
-        return await self.revise(checkpoint, REFETCH_FEEDBACK, kept_fields or {})
+        return await self.revise(checkpoint, REFETCH_FEEDBACK, kept_fields)
 
     async def approve(self, checkpoint: Checkpoint) -> TurnOutcome:
-        return await self._resume(checkpoint, build_review_reply(DECISION_APPROVE))
+        return await self._resume(
+            checkpoint, build_review_reply(ReviewDecision.APPROVE)
+        )
 
     async def reject(self, checkpoint: Checkpoint) -> TurnOutcome:
-        return await self._resume(checkpoint, build_review_reply(DECISION_REJECT))
+        return await self._resume(checkpoint, build_review_reply(ReviewDecision.REJECT))
 
     async def _resume(
         self,
@@ -248,7 +241,7 @@ class TriageWorkflow:
 
     async def _session_state(self, user_id: str, session_id: str) -> dict[str, Any]:
         session = await self._session_service.get_session(
-            app_name=self._app_name,
+            app_name=APP_NAME,
             user_id=user_id,
             session_id=session_id,
         )
@@ -278,7 +271,7 @@ def _configure_langsmith(settings: Settings) -> None:
 def _draft_from_state(state: dict[str, Any]) -> ProjectDraft:
     payload = state.get(DRAFT_PROPOSAL_STATE_KEY)
     if payload is None:
-        raise RuntimeError("No draft_proposal found in session state.")
+        raise RuntimeError(f"No {DRAFT_PROPOSAL_STATE_KEY} found in session state.")
     # Name the default task after its subject before anyone sees the draft,
     # so the review card, Telegram and Notion all agree.
     return with_composed_task_names(ProjectDraft.model_validate(payload))

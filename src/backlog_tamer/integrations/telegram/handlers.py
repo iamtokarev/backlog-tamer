@@ -277,11 +277,7 @@ async def _handle_quick_edit(
     await query.edit_message_text(
         render_draft_message(review.draft_proposal, review.grounding),
         parse_mode=ParseMode.HTML,
-        reply_markup=build_review_keyboard(
-            review.draft_proposal,
-            confirmation_id,
-            review.grounding,
-        ),
+        reply_markup=_review_keyboard(review),
     )
 
 
@@ -295,11 +291,7 @@ async def _restore_review_keyboard(
         await query.edit_message_text(UNKNOWN_CONFIRMATION_REPLY)
         return
     await query.edit_message_reply_markup(
-        reply_markup=build_review_keyboard(
-            review.draft_proposal,
-            confirmation_id,
-            review.grounding,
-        ),
+        reply_markup=_review_keyboard(review),
     )
 
 
@@ -412,11 +404,15 @@ async def _show_draft(
     await progress_message.edit_text(
         card,
         parse_mode=ParseMode.HTML,
-        reply_markup=build_review_keyboard(
-            result.draft_proposal,
-            result.confirmation_id,
-            result.grounding,
-        ),
+        reply_markup=_review_keyboard(result),
+    )
+
+
+def _review_keyboard(review: IntakeResult):
+    return build_review_keyboard(
+        review.draft_proposal,
+        review.confirmation_id,
+        review.grounding,
     )
 
 

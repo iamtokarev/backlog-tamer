@@ -87,12 +87,12 @@ class ScriptedTriageWorkflow:
     async def refetch(
         self,
         checkpoint: Checkpoint,
-        kept_fields: dict[str, str] | None = None,
+        kept_fields: dict[str, str],
     ) -> TurnOutcome:
         return self._next(
             "refetch",
             checkpoint=checkpoint,
-            kept_fields=kept_fields or {},
+            kept_fields=kept_fields,
         )
 
     async def approve(self, checkpoint: Checkpoint) -> TurnOutcome:

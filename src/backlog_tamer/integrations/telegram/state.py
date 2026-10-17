@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-from backlog_tamer.application.database_urls import (
+from backlog_tamer.database_urls import (
     to_sync_database_url,
     uses_external_pooler,
 )

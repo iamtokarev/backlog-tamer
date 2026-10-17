@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from enum import StrEnum
 
 from google.adk import Workflow
 from google.adk.events import Event, RequestInput
@@ -17,21 +18,24 @@ REVIEW_INTERRUPT_ID = "human_review"
 TRIAGE_INPUT_STATE_KEY = "triage_input"
 REVIEW_FEEDBACK_STATE_KEY = "review_feedback"
 REVIEW_HISTORY_STATE_KEY = "review_history"
-# Written by the drafting agent (its output_key) and by fetch_url.
+# Written by the drafting agent (its output_key).
 DRAFT_PROPOSAL_STATE_KEY = "draft_proposal"
+# Written by fetch_url.
 FETCHED_CONTEXT_STATE_KEY = "fetched_context"
 DRAFT_SNAPSHOT_STATE_KEY = "draft_snapshot"
 
 REVIEW_DECISION_FIELD = "decision"
 REVIEW_FEEDBACK_FIELD = "feedback"
-DECISION_APPROVE = "approve"
-DECISION_REJECT = "reject"
-DECISION_REVISE = "revise"
-REVIEW_DECISIONS = frozenset({DECISION_APPROVE, DECISION_REJECT, DECISION_REVISE})
 
 ROUTE_APPROVED = "approved"
 ROUTE_REJECTED = "rejected"
 ROUTE_REVISE = "revise"
+
+
+class ReviewDecision(StrEnum):
+    APPROVE = "approve"
+    REJECT = "reject"
+    REVISE = "revise"
 
 
 def build_triage_message(
@@ -75,33 +79,35 @@ def request_human_review(
     )
 
 
-def build_review_reply(decision: str, feedback: str = "") -> dict[str, str]:
+def build_review_reply(
+    decision: ReviewDecision,
+    feedback: str = "",
+) -> dict[str, str]:
     """The structured answer to the review interrupt.
 
     Routing on the decision rather than the reply text means revision
     feedback that happens to read "approve" is still a revision.
     """
-    if decision not in REVIEW_DECISIONS:
-        raise ValueError(f"Unknown review decision: {decision!r}")
-    return {REVIEW_DECISION_FIELD: decision, REVIEW_FEEDBACK_FIELD: feedback}
+    return {
+        REVIEW_DECISION_FIELD: decision.value,
+        REVIEW_FEEDBACK_FIELD: feedback,
+    }
 
 
 def handle_human_review(
     node_input: dict[str, str],
     review_history: list[str] | None = None,
 ):
-    decision = node_input.get(REVIEW_DECISION_FIELD)
+    # Raises ValueError for anything that is not a ReviewDecision.
+    decision = ReviewDecision(node_input.get(REVIEW_DECISION_FIELD))
 
-    if decision == DECISION_APPROVE:
+    if decision is ReviewDecision.APPROVE:
         yield Event(route=ROUTE_APPROVED)
         return
 
-    if decision == DECISION_REJECT:
+    if decision is ReviewDecision.REJECT:
         yield Event(route=ROUTE_REJECTED)
         return
-
-    if decision != DECISION_REVISE:
-        raise ValueError(f"Unknown review decision: {decision!r}")
 
     feedback = (node_input.get(REVIEW_FEEDBACK_FIELD) or "").strip()
     updated_review_history = [*(review_history or []), feedback]

@@ -52,7 +52,8 @@ class ConfirmationRecord(BaseModel):
     user_id: str
     chat_id: str | None = None
     source_message_id: str | None = None
-    # Opaque: stored and handed back to TriageWorkflow, never read here.
+    # Opaque to the intake logic, which only hands it back to TriageWorkflow;
+    # the store maps it onto the existing session/invocation/call-id columns.
     checkpoint: Checkpoint
     status: ConfirmationStatus
     incoming_context: IncomingContext
@@ -86,6 +87,11 @@ class ConfirmationRecord(BaseModel):
             for field, edit in self.manual_edits.items()
             if edit.before and edit.before != edit.after
         }
+
+    @property
+    def kept_fields(self) -> dict[str, str]:
+        """Quick edits the next Revision must not undo."""
+        return {field: edit.after for field, edit in self.manual_edits.items()}
 
 
 class IntakeResult(BaseModel):

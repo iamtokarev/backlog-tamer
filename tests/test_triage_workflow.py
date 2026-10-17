@@ -215,7 +215,7 @@ def test_refetch_opens_the_page_again_and_pauses_for_review(monkeypatch):
     workflow = _workflow(node)
     started = _start(workflow)
 
-    outcome = asyncio.run(workflow.refetch(started.checkpoint))
+    outcome = asyncio.run(workflow.refetch(started.checkpoint, {}))
 
     assert isinstance(outcome, NeedsReview)
     assert len(requested) == 2

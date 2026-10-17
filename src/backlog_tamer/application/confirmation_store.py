@@ -14,8 +14,8 @@ from backlog_tamer.agents.intake_triage.schemas import (
     ProjectDraft,
 )
 from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
+from backlog_tamer.database_urls import to_sync_database_url, uses_external_pooler
 
-from .database_urls import to_sync_database_url, uses_external_pooler
 from .models import ConfirmationRecord, ConfirmationStatus, ManualEdit
 
 

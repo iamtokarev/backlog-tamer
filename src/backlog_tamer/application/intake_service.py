@@ -5,7 +5,11 @@ import logging
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext
+from backlog_tamer.agents.intake_triage.schemas import (
+    DraftGrounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     NeedsReview,
@@ -39,15 +43,31 @@ TERMINAL_STATUSES = frozenset(
 )
 
 
-def _kept_fields(confirmation: ConfirmationRecord) -> dict[str, str]:
-    """Quick edits the next Revision must not undo."""
-    return {field: edit.after for field, edit in confirmation.manual_edits.items()}
+def _needs_review(
+    confirmation_id: str,
+    draft: ProjectDraft,
+    grounding: DraftGrounding,
+    review_message: str,
+) -> IntakeResult:
+    return IntakeResult(
+        status="needs_review",
+        confirmation_id=confirmation_id,
+        draft_proposal=draft,
+        grounding=grounding,
+        review_message=review_message,
+    )
 
 
 def _review_result(confirmation: ConfirmationRecord) -> IntakeResult:
-    pending = confirmation.status is ConfirmationStatus.PENDING_REVIEW
+    if confirmation.status is ConfirmationStatus.PENDING_REVIEW:
+        return _needs_review(
+            confirmation.confirmation_id,
+            confirmation.draft_proposal,
+            confirmation.grounding,
+            confirmation.review_message,
+        )
     return IntakeResult(
-        status="needs_review" if pending else confirmation.status.value,
+        status=confirmation.status.value,
         confirmation_id=confirmation.confirmation_id,
         draft_proposal=confirmation.draft_proposal,
         grounding=confirmation.grounding,
@@ -132,12 +152,11 @@ class IntakeService:
             updated_at=utc_now(),
         )
         self.store.create_pending(confirmation)
-        return IntakeResult(
-            status="needs_review",
-            confirmation_id=confirmation.confirmation_id,
-            draft_proposal=outcome.draft,
-            grounding=outcome.grounding,
-            review_message=outcome.review_message,
+        return _needs_review(
+            confirmation.confirmation_id,
+            outcome.draft,
+            outcome.grounding,
+            outcome.review_message,
         )
 
     def get_review(self, confirmation_id: str) -> IntakeResult | None:
@@ -183,7 +202,7 @@ class IntakeService:
             lambda confirmation: self.workflow.revise(
                 confirmation.checkpoint,
                 feedback,
-                _kept_fields(confirmation),
+                confirmation.kept_fields,
             ),
         )
 
@@ -193,7 +212,7 @@ class IntakeService:
             confirmation_id,
             lambda confirmation: self.workflow.refetch(
                 confirmation.checkpoint,
-                _kept_fields(confirmation),
+                confirmation.kept_fields,
             ),
         )
 
@@ -229,12 +248,11 @@ class IntakeService:
                     review_message=outcome.review_message,
                     grounding=outcome.grounding,
                 )
-                return IntakeResult(
-                    status="needs_review",
-                    confirmation_id=confirmation_id,
-                    draft_proposal=outcome.draft,
-                    grounding=outcome.grounding,
-                    review_message=outcome.review_message,
+                return _needs_review(
+                    confirmation_id,
+                    outcome.draft,
+                    outcome.grounding,
+                    outcome.review_message,
                 )
             case Approved():
                 return await self.finalize_approval(confirmation_id)
