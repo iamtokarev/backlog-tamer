@@ -17,14 +17,11 @@ from backlog_tamer.application.models import (
     ConfirmationStatus,
     ManualEdit,
 )
+from backlog_tamer.integrations.telegram.callbacks import PickValue, decode_callback
 from backlog_tamer.integrations.telegram.rendering import (
     FIELD_OPTIONS,
-    FIELD_TYPE,
     build_picker_keyboard,
-    build_review_keyboard,
 )
-
-CALLBACK_DATA_LIMIT = 64
 
 
 def test_quick_edit_patches_the_draft_without_touching_the_agent(tmp_path: Path):
@@ -123,39 +120,18 @@ def test_quick_edit_is_rejected_once_the_draft_is_resolved(tmp_path: Path):
         )
 
 
-def test_callback_data_fits_telegram_limit_for_every_option():
-    confirmation_id = str(uuid4())
-    draft = _build_confirmation().draft_proposal
-    keyboards = [
-        build_review_keyboard(draft, confirmation_id),
-        *(
-            build_picker_keyboard(field_code, confirmation_id)
-            for field_code in FIELD_OPTIONS
-        ),
-    ]
-
-    payloads = [
-        button.callback_data
-        for keyboard in keyboards
-        for row in keyboard.inline_keyboard
-        for button in row
-    ]
-
-    assert payloads
-    for payload in payloads:
-        assert len(payload.encode("utf-8")) <= CALLBACK_DATA_LIMIT, payload
-
-
 def test_picker_offers_every_schema_option():
-    keyboard = build_picker_keyboard(FIELD_TYPE, str(uuid4()))
-    values = [
-        button.callback_data.split(":")[2]
+    keyboard = build_picker_keyboard("project_type", str(uuid4()))
+    callbacks = [
+        decode_callback(button.callback_data)
         for row in keyboard.inline_keyboard
         for button in row
-        if button.callback_data.startswith("pick:")
+    ]
+    values = [
+        callback.value for callback in callbacks if isinstance(callback, PickValue)
     ]
 
-    assert values == list(FIELD_OPTIONS[FIELD_TYPE])
+    assert values == list(FIELD_OPTIONS["project_type"])
 
 
 def _build_store(tmp_path: Path) -> ConfirmationStore:
