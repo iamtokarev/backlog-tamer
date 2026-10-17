@@ -203,8 +203,9 @@ def test_reject_closes_the_review_without_touching_notion(tmp_path: Path):
         lambda service, cid: service.approve(cid),
         lambda service, cid: service.reject(cid),
         lambda service, cid: service.revise(cid, "shorter"),
+        lambda service, cid: service.refetch(cid),
     ],
-    ids=["approve", "reject", "revise"],
+    ids=["approve", "reject", "revise", "refetch"],
 )
 def test_a_finished_review_ignores_late_decisions(tmp_path: Path, decide):
     harness = Harness(tmp_path, _needs_review(), Rejected(draft=_draft()))
@@ -223,3 +224,77 @@ def test_a_decision_on_an_unknown_confirmation_is_an_error(tmp_path: Path):
 
     with pytest.raises(ValueError):
         asyncio.run(harness.service.approve("missing"))
+
+
+def test_get_review_shows_the_draft_awaiting_review(tmp_path: Path):
+    grounding = DraftGrounding(fetch_status="success", site_name="LangChain Blog")
+    harness = Harness(tmp_path, _needs_review(grounding=grounding))
+    started = harness.start()
+
+    review = harness.service.get_review(started.confirmation_id)
+
+    assert review is not None
+    assert review.status == "needs_review"
+    assert review.confirmation_id == started.confirmation_id
+    assert review.draft_proposal == _draft()
+    assert review.grounding == grounding
+
+
+def test_get_review_of_an_unknown_confirmation_is_none(tmp_path: Path):
+    harness = Harness(tmp_path)
+
+    assert harness.service.get_review("missing") is None
+
+
+def test_a_quick_edit_changes_the_draft_without_a_triage_turn(tmp_path: Path):
+    harness = Harness(tmp_path, _needs_review())
+    started = harness.start()
+
+    result = harness.service.apply_quick_edit(
+        started.confirmation_id,
+        "priority",
+        "Low",
+    )
+
+    assert result.status == "needs_review"
+    assert result.draft_proposal == _draft(priority="Low")
+    assert harness.workflow.operations == ["start"]
+    review = harness.service.get_review(started.confirmation_id)
+    assert review is not None
+    assert review.draft_proposal == _draft(priority="Low")
+
+
+def test_a_quick_edit_after_the_review_ended_is_refused(tmp_path: Path):
+    harness = Harness(tmp_path, _needs_review(), Rejected(draft=_draft()))
+    started = harness.start()
+    asyncio.run(harness.service.reject(started.confirmation_id))
+
+    with pytest.raises(ValueError):
+        harness.service.apply_quick_edit(started.confirmation_id, "priority", "Low")
+
+
+def test_refetch_redrafts_from_the_checkpoint_keeping_quick_edits(tmp_path: Path):
+    regrounded = DraftGrounding(fetch_status="success", site_name="LangChain Blog")
+    harness = Harness(
+        tmp_path,
+        _needs_review(grounding=DraftGrounding(fetch_status="error")),
+        _needs_review(checkpoint=SECOND_CHECKPOINT, grounding=regrounded),
+    )
+    started = harness.start()
+    harness.store.apply_manual_edit(
+        confirmation_id=started.confirmation_id,
+        field="priority",
+        value="Low",
+    )
+
+    result = asyncio.run(harness.service.refetch(started.confirmation_id))
+
+    assert result.status == "needs_review"
+    assert result.grounding == regrounded
+    call = harness.workflow.calls[-1]
+    assert call.operation == "refetch"
+    assert call.args["checkpoint"] == FIRST_CHECKPOINT
+    assert call.args["kept_fields"] == {"priority": "Low"}
+    stored = harness.store.get(started.confirmation_id)
+    assert stored is not None
+    assert stored.grounding == regrounded

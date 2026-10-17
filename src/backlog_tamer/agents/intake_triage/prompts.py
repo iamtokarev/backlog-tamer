@@ -195,6 +195,11 @@ I already corrected these fields myself, keep them exactly as they are: {fields}
 {feedback}
 """.strip()
 
+REFETCH_FEEDBACK = (
+    "The page fetch failed last time. Fetch the source URL again and redraft "
+    "from what the page actually says."
+)
+
 
 def build_revision_feedback(feedback: str, kept_fields: dict[str, str]) -> str:
     """Tell the agent which fields the user already fixed with the buttons.

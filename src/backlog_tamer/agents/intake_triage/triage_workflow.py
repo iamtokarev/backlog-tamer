@@ -22,9 +22,10 @@ from backlog_tamer.application.database_urls import (
 )
 from backlog_tamer.config import Settings
 
-from .prompts import build_revision_feedback
+from .prompts import REFETCH_FEEDBACK, build_revision_feedback
 from .schemas import DraftGrounding, IncomingContext, ProjectDraft
 from .task_names import with_composed_task_names
+from .tools import fetch_url
 from .workflow import (
     DECISION_APPROVE,
     DECISION_REJECT,
@@ -148,6 +149,19 @@ class TriageWorkflow:
                 build_revision_feedback(feedback, kept_fields),
             ),
         )
+
+    async def refetch(
+        self,
+        checkpoint: Checkpoint,
+        kept_fields: dict[str, str] | None = None,
+    ) -> TurnOutcome:
+        """Redraft from a fresh read of the source page.
+
+        The fetch cache goes first, or the agent would be handed the same
+        page it already read instead of reaching the site again.
+        """
+        fetch_url.clear_cache()
+        return await self.revise(checkpoint, REFETCH_FEEDBACK, kept_fields or {})
 
     async def approve(self, checkpoint: Checkpoint) -> TurnOutcome:
         return await self._resume(checkpoint, build_review_reply(DECISION_APPROVE))

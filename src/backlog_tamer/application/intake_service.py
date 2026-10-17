@@ -44,6 +44,18 @@ def _kept_fields(confirmation: ConfirmationRecord) -> dict[str, str]:
     return {field: edit.after for field, edit in confirmation.manual_edits.items()}
 
 
+def _review_result(confirmation: ConfirmationRecord) -> IntakeResult:
+    pending = confirmation.status is ConfirmationStatus.PENDING_REVIEW
+    return IntakeResult(
+        status="needs_review" if pending else confirmation.status.value,
+        confirmation_id=confirmation.confirmation_id,
+        draft_proposal=confirmation.draft_proposal,
+        grounding=confirmation.grounding,
+        review_message=confirmation.review_message,
+        notion_project_url=confirmation.notion_project_url,
+    )
+
+
 def _log_corrections(confirmation: ConfirmationRecord) -> None:
     """Record which fields the agent got wrong, at the moment they stick.
 
@@ -128,6 +140,30 @@ class IntakeService:
             review_message=outcome.review_message,
         )
 
+    def get_review(self, confirmation_id: str) -> IntakeResult | None:
+        """The Draft as it stands now, or None for an unknown Confirmation."""
+        confirmation = self.store.get(confirmation_id)
+        if confirmation is None:
+            return None
+        return _review_result(confirmation)
+
+    def apply_quick_edit(
+        self,
+        confirmation_id: str,
+        field: str,
+        value: str,
+    ) -> IntakeResult:
+        """Set one Draft field directly; the next Revision keeps it.
+
+        Raises ValueError for an unknown Confirmation or a finished Review.
+        """
+        confirmation = self.store.apply_manual_edit(
+            confirmation_id=confirmation_id,
+            field=field,
+            value=value,
+        )
+        return _review_result(confirmation)
+
     async def approve(self, confirmation_id: str) -> IntakeResult:
         return await self._resume(
             confirmation_id,
@@ -147,6 +183,16 @@ class IntakeService:
             lambda confirmation: self.workflow.revise(
                 confirmation.checkpoint,
                 feedback,
+                _kept_fields(confirmation),
+            ),
+        )
+
+    async def refetch(self, confirmation_id: str) -> IntakeResult:
+        """Redraft after a failed page fetch, from a fresh read of the page."""
+        return await self._resume(
+            confirmation_id,
+            lambda confirmation: self.workflow.refetch(
+                confirmation.checkpoint,
                 _kept_fields(confirmation),
             ),
         )

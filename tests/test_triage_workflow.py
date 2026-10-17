@@ -7,6 +7,8 @@ reply and the session state are all the production ones.
 from __future__ import annotations
 
 import asyncio
+import socket
+from email.message import Message
 
 import pytest
 from google.adk import Workflow
@@ -15,6 +17,7 @@ from google.adk.events.event_actions import EventActions
 from google.adk.sessions import InMemorySessionService
 
 from backlog_tamer.agents.intake_triage.schemas import IncomingContext
+from backlog_tamer.agents.intake_triage.tools import fetch_url
 from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     NeedsReview,
@@ -165,6 +168,58 @@ def test_reject_ends_the_triage_with_the_last_draft():
 
     assert isinstance(outcome, Rejected)
     assert outcome.draft.project_name == "LangGraph: stateful agents"
+
+
+def _serve_page(monkeypatch) -> list[str]:
+    """Answer every page fetch with the same page; return the request log."""
+    requested: list[str] = []
+
+    def resolve(*_args, **_kwargs):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("1.1.1.1", 0))
+        ]
+
+    def request(url):
+        requested.append(url)
+        headers = Message()
+        headers["content-type"] = "text/html"
+        return fetch_url.PublicHttpResponse(
+            url=url,
+            status=200,
+            headers=headers,
+            body=b"<html><head><title>LangGraph</title></head><body></body></html>",
+        )
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(fetch_url, "_request_public_url", request)
+    fetch_url.clear_cache()
+    return requested
+
+
+class FetchingDraftNode(StubDraftNode):
+    """A drafting step that opens the source page each turn, as the agent does."""
+
+    def as_node(self):
+        draft = super().as_node()
+
+        def fetch_then_draft(node_input):
+            fetch_url.fetch_url(SOURCE_URL)
+            yield from draft(node_input)
+
+        return fetch_then_draft
+
+
+def test_refetch_opens_the_page_again_and_pauses_for_review(monkeypatch):
+    requested = _serve_page(monkeypatch)
+    node = FetchingDraftNode()
+    workflow = _workflow(node)
+    started = _start(workflow)
+
+    outcome = asyncio.run(workflow.refetch(started.checkpoint))
+
+    assert isinstance(outcome, NeedsReview)
+    assert len(requested) == 2
+    assert "Fetch the source URL again" in node.inputs[-1]
 
 
 def test_a_turn_without_an_outcome_is_an_error():
