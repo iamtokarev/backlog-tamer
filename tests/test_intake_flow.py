@@ -197,6 +197,16 @@ def test_reject_closes_the_review_without_touching_notion(tmp_path: Path):
     assert stored.status is ConfirmationStatus.REJECTED
 
 
+def test_a_rejection_without_a_draft_reports_the_stored_one(tmp_path: Path):
+    harness = Harness(tmp_path, _needs_review(), Rejected(draft=None))
+    started = harness.start()
+
+    result = asyncio.run(harness.service.reject(started.confirmation_id))
+
+    assert result.status == ConfirmationStatus.REJECTED.value
+    assert result.draft_proposal == _draft()
+
+
 @pytest.mark.parametrize(
     "decide",
     [

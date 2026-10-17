@@ -68,7 +68,8 @@ class Approved:
 
 @dataclass(frozen=True)
 class Rejected:
-    draft: ProjectDraft
+    # None when session state holds no Draft; the caller keeps its own copy.
+    draft: ProjectDraft | None
 
 
 TurnOutcome = NeedsReview | Approved | Rejected
@@ -212,12 +213,11 @@ class TriageWorkflow:
         session_id: str,
         events: list[Any],
     ) -> TurnOutcome:
-        state = await self._session_state(user_id, session_id)
-        draft = _draft_from_state(state)
-
         interrupt = _find_review_interrupt(events)
         if interrupt is not None:
             event, call = interrupt
+            state = await self._session_state(user_id, session_id)
+            draft = _draft_from_state(state)
             return NeedsReview(
                 draft=draft,
                 grounding=_grounding_from_state(state, draft),
@@ -234,7 +234,10 @@ class TriageWorkflow:
         if route == ROUTE_APPROVED:
             return Approved()
         if route == ROUTE_REJECTED:
-            return Rejected(draft=draft)
+            state = await self._session_state(user_id, session_id)
+            if state.get(DRAFT_PROPOSAL_STATE_KEY) is None:
+                return Rejected(draft=None)
+            return Rejected(draft=_draft_from_state(state))
         raise RuntimeError(
             "Triage turn produced neither a review interrupt nor a final route.",
         )

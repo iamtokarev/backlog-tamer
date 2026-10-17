@@ -78,6 +78,8 @@ def render_outcome(outcome: TurnOutcome) -> None:
             print(f"\nGrounding: {outcome.grounding.model_dump_json()}")
         case Approved():
             print("\nApproved.")
+        case Rejected(draft=None):
+            print("\nRejected.")
         case Rejected():
             print(f"\nRejected: {outcome.draft.project_name}")
 

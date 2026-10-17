@@ -27,6 +27,8 @@ from backlog_tamer.agents.intake_triage.triage_workflow import (
 from backlog_tamer.agents.intake_triage.workflow import (
     DRAFT_PROPOSAL_STATE_KEY,
     FETCHED_CONTEXT_STATE_KEY,
+    ROUTE_APPROVED,
+    ROUTE_REJECTED,
     build_intake_workflow,
 )
 
@@ -220,6 +222,28 @@ def test_refetch_opens_the_page_again_and_pauses_for_review(monkeypatch):
     assert isinstance(outcome, NeedsReview)
     assert len(requested) == 2
     assert "Fetch the source URL again" in node.inputs[-1]
+
+
+def _route_without_drafting(route: str) -> TriageWorkflow:
+    """A graph that decides at once, so session state never holds a Draft."""
+
+    def decide(node_input):
+        yield Event(route=route)
+
+    graph = Workflow(name="decide_at_once", edges=[("START", decide)])
+    return TriageWorkflow(graph, InMemorySessionService())
+
+
+def test_approved_does_not_need_a_draft_in_session_state():
+    outcome = _start(_route_without_drafting(ROUTE_APPROVED))
+
+    assert outcome == Approved()
+
+
+def test_rejected_without_a_draft_in_session_state_carries_none():
+    outcome = _start(_route_without_drafting(ROUTE_REJECTED))
+
+    assert outcome == Rejected(draft=None)
 
 
 def test_a_turn_without_an_outcome_is_an_error():

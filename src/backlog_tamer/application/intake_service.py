@@ -261,7 +261,7 @@ class IntakeService:
                 return IntakeResult(
                     status=ConfirmationStatus.REJECTED.value,
                     confirmation_id=confirmation_id,
-                    draft_proposal=outcome.draft,
+                    draft_proposal=outcome.draft or confirmation.draft_proposal,
                 )
         raise RuntimeError(f"Unknown Turn outcome: {outcome!r}")
 
