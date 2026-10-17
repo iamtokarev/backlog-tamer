@@ -3,9 +3,9 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+from collections import OrderedDict
 from dataclasses import dataclass
 from email.message import Message
-from functools import lru_cache
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from io import BytesIO
 from typing import Final
@@ -98,6 +98,11 @@ PLACEHOLDER_CANONICAL_SEGMENTS: Final[frozenset[str]] = frozenset(
 )
 FETCHED_CONTEXT_STATE_KEY: Final[str] = "fetched_context"
 
+# Process-wide, so it lives as long as a warm Lambda. Only successes go in:
+# a timeout or a 503 is usually transient, and caching it would serve the
+# same failure for every later capture of that link.
+_SUCCESSFUL_FETCHES: OrderedDict[str, FetchedUrl] = OrderedDict()
+
 
 class RedirectLimitExceededError(ValueError):
     pass
@@ -181,7 +186,21 @@ def fetch_url(url: str, tool_context: ToolContext | None = None) -> dict:
 
 def clear_cache() -> None:
     """Forget cached fetches so a retry can reach the page again."""
-    _fetch_url_cached.cache_clear()
+    _SUCCESSFUL_FETCHES.clear()
+
+
+def _fetch_url_cached(normalized_url: str) -> FetchedUrl:
+    cached = _SUCCESSFUL_FETCHES.get(normalized_url)
+    if cached is not None:
+        _SUCCESSFUL_FETCHES.move_to_end(normalized_url)
+        return cached
+
+    result = _fetch_fresh(normalized_url)
+    if result.status == "success":
+        _SUCCESSFUL_FETCHES[normalized_url] = result
+        if len(_SUCCESSFUL_FETCHES) > MAX_CACHED_URLS:
+            _SUCCESSFUL_FETCHES.popitem(last=False)
+    return result
 
 
 def _persist_fetch_result(
@@ -201,8 +220,7 @@ def _persist_fetch_result(
     tool_context.state[FETCHED_CONTEXT_STATE_KEY] = updated
 
 
-@lru_cache(maxsize=MAX_CACHED_URLS)
-def _fetch_url_cached(normalized_url: str) -> FetchedUrl:
+def _fetch_fresh(normalized_url: str) -> FetchedUrl:
     parsed_url = urlparse(normalized_url)
     if _is_x_status_url(parsed_url):
         x_result = _fetch_x_status_oembed(normalized_url)
