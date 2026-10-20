@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import NamedTuple
 
-from sqlalchemy import DateTime, String, create_engine
+from sqlalchemy import BigInteger, DateTime, String, create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -21,6 +22,15 @@ class Base(DeclarativeBase):
     pass
 
 
+class PendingRevision(NamedTuple):
+    """A Revision the user asked for and has not sent the note for yet."""
+
+    confirmation_id: str
+    # The review card whose keyboard became "Cancel revision"; retired once the
+    # note arrives. None for a wait recorded before this column existed.
+    card_message_id: int | None = None
+
+
 class TelegramRevisionRow(Base):
     __tablename__ = "telegram_revision_states"
 
@@ -28,6 +38,7 @@ class TelegramRevisionRow(Base):
     user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     chat_id: Mapped[str] = mapped_column(String(255), nullable=False)
     confirmation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    card_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -56,6 +67,7 @@ class TelegramStateStore:
         )
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)
+        self._ensure_revision_columns()
 
     def set_awaiting_revision(
         self,
@@ -63,6 +75,7 @@ class TelegramStateStore:
         user_id: str,
         chat_id: str,
         confirmation_id: str,
+        card_message_id: int | None = None,
     ) -> None:
         key = self._state_key(user_id, chat_id)
         now = utc_now()
@@ -75,23 +88,30 @@ class TelegramStateStore:
                         user_id=user_id,
                         chat_id=chat_id,
                         confirmation_id=confirmation_id,
+                        card_message_id=card_message_id,
                         created_at=now,
                         updated_at=now,
                     )
                 )
                 return
             row.confirmation_id = confirmation_id
+            row.card_message_id = card_message_id
             row.updated_at = now
 
-    def pop_awaiting_revision(self, *, user_id: str, chat_id: str) -> str | None:
+    def pop_awaiting_revision(
+        self,
+        *,
+        user_id: str,
+        chat_id: str,
+    ) -> PendingRevision | None:
         key = self._state_key(user_id, chat_id)
         with self.session_factory.begin() as session:
             row = session.get(TelegramRevisionRow, key)
             if row is None:
                 return None
-            confirmation_id = row.confirmation_id
+            pending = PendingRevision(row.confirmation_id, row.card_message_id)
             session.delete(row)
-            return confirmation_id
+            return pending
 
     def record_update_once(self, update_id: int | str) -> bool:
         now = utc_now()
@@ -116,6 +136,24 @@ class TelegramStateStore:
     def _state_key(user_id: str, chat_id: str) -> str:
         return f"{user_id}:{chat_id}"
 
+    def _ensure_revision_columns(self) -> None:
+        # create_all leaves an existing table alone, so a column added since
+        # the table was first created has to be added here.
+        inspector = inspect(self.engine)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns(TelegramRevisionRow.__tablename__)
+        }
+        if "card_message_id" in columns:
+            return
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE telegram_revision_states "
+                    "ADD COLUMN card_message_id BIGINT"
+                )
+            )
+
 
 def state_identity_from_update(update) -> tuple[str, str] | None:
     user = update.effective_user
@@ -125,7 +163,12 @@ def state_identity_from_update(update) -> tuple[str, str] | None:
     return str(user.id), str(chat.id)
 
 
-def get_session_revision(context, *, user_id: str, chat_id: str) -> str | None:
+def get_session_revision(
+    context,
+    *,
+    user_id: str,
+    chat_id: str,
+) -> PendingRevision | None:
     store = context.bot_data.get("telegram_state_store")
     if store is not None:
         return store.pop_awaiting_revision(user_id=user_id, chat_id=chat_id)
@@ -138,6 +181,7 @@ def set_session_revision(
     user_id: str,
     chat_id: str,
     confirmation_id: str,
+    card_message_id: int | None = None,
 ) -> None:
     store = context.bot_data.get("telegram_state_store")
     if store is not None:
@@ -145,6 +189,10 @@ def set_session_revision(
             user_id=user_id,
             chat_id=chat_id,
             confirmation_id=confirmation_id,
+            card_message_id=card_message_id,
         )
         return
-    context.user_data["awaiting_revision_for"] = confirmation_id
+    context.user_data["awaiting_revision_for"] = PendingRevision(
+        confirmation_id,
+        card_message_id,
+    )

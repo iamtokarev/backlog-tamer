@@ -4,6 +4,7 @@ import logging
 
 from telegram import ForceReply, Update
 from telegram.constants import ParseMode
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
@@ -31,6 +32,7 @@ from .rendering import (
     render_terminal_message,
 )
 from .state import (
+    PendingRevision,
     get_session_revision,
     set_session_revision,
     state_identity_from_update,
@@ -57,6 +59,7 @@ SAVING_MESSAGE = "⏳ Saving to Notion…"
 UNDOING_MESSAGE = "↩️ Removing it from Notion…"
 ADDING_TASK_MESSAGE = "＋ Adding the task to the existing project…"
 REFETCHING_MESSAGE = "🔎 Opening the page again…"
+SUPERSEDED_NOTE = "⤵️ <i>Revised below.</i>"
 
 
 async def handle_message(
@@ -139,6 +142,7 @@ async def handle_callback(
             user_id=user_id,
             chat_id=chat_id,
             confirmation_id=confirmation_id,
+            card_message_id=query.message.message_id,
         )
         # The card shows it is waiting, and offers the way out: without this
         # the next message sent for any reason is swallowed as feedback.
@@ -195,7 +199,9 @@ async def handle_callback(
         return
     except Exception:
         logger.exception("Unexpected review action error")
-        await query.edit_message_text(REVIEW_ERROR_REPLY)
+        await _show_review_error(
+            query.edit_message_text, intake_service, confirmation_id
+        )
         return
 
     await query.edit_message_text(
@@ -221,7 +227,9 @@ async def _handle_refetch(
         return
     except Exception:
         logger.exception("Unexpected refetch error")
-        await query.edit_message_text(REVIEW_ERROR_REPLY)
+        await _show_review_error(
+            query.edit_message_text, intake_service, confirmation_id
+        )
         return
 
     if result.status != "needs_review":
@@ -254,6 +262,33 @@ async def _apply_quick_edit(
 
     await query.edit_message_text(
         render_draft_message(review.draft_proposal, review.grounding),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_review_keyboard(review),
+    )
+
+
+async def _show_review_error(
+    edit,
+    intake_service: IntakeService,
+    confirmation_id: str,
+) -> None:
+    """Say the step failed, with the Draft and its keyboard while it is open.
+
+    The failed step already replaced the card (and its keyboard), so without
+    the keyboard back there would be nothing left to try again with.
+    """
+    try:
+        review = intake_service.get_review(confirmation_id)
+    except Exception:
+        logger.exception("Could not reload confirmation %s", confirmation_id)
+        review = None
+    if review is None or review.status != "needs_review":
+        await edit(REVIEW_ERROR_REPLY)
+        return
+
+    card = render_draft_message(review.draft_proposal, review.grounding)
+    await edit(
+        f"{REVIEW_ERROR_REPLY}\n\n{card}",
         parse_mode=ParseMode.HTML,
         reply_markup=_review_keyboard(review),
     )
@@ -314,7 +349,7 @@ async def _handle_new_intake(
 async def _handle_revision_text(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    confirmation_id: str,
+    pending: PendingRevision,
 ) -> None:
     message = update.effective_message
     chat = update.effective_chat
@@ -333,12 +368,17 @@ async def _handle_revision_text(
                 context,
                 user_id=user_id,
                 chat_id=chat_id,
-                confirmation_id=confirmation_id,
+                confirmation_id=pending.confirmation_id,
+                card_message_id=pending.card_message_id,
             )
         return
 
+    confirmation_id = pending.confirmation_id
     intake_service = _get_intake_service(context)
-    before = _require_draft(intake_service, confirmation_id)
+    review = intake_service.get_review(confirmation_id)
+    before = review.draft_proposal if review is not None else None
+    if review is not None and pending.card_message_id is not None:
+        await _retire_card(context, chat.id, pending.card_message_id, review)
 
     progress = await message.reply_text(REVISING_MESSAGE, parse_mode=ParseMode.HTML)
 
@@ -350,7 +390,7 @@ async def _handle_revision_text(
         return
     except Exception:
         logger.exception("Unexpected error during revision")
-        await progress.edit_text(REVIEW_ERROR_REPLY)
+        await _show_review_error(progress.edit_text, intake_service, confirmation_id)
         return
 
     if result.status == "needs_review":
@@ -362,6 +402,32 @@ async def _handle_revision_text(
         parse_mode=ParseMode.HTML,
         reply_markup=_terminal_keyboard(result),
     )
+
+
+async def _retire_card(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int,
+    review: IntakeResult,
+) -> None:
+    """Mark the card the Revision started from as replaced, and drop its keyboard.
+
+    The Revision answers in a new message, which becomes the live card; left
+    alone, the old one would keep offering "Cancel revision" for a Revision
+    that is already under way.
+    """
+    card = render_draft_message(review.draft_proposal, review.grounding)
+    try:
+        await context.bot.edit_message_text(
+            f"{SUPERSEDED_NOTE}\n\n{card}",
+            chat_id=chat_id,
+            message_id=message_id,
+            parse_mode=ParseMode.HTML,
+            reply_markup=None,
+        )
+    except TelegramError:
+        # Cosmetic: the Revision itself must still run.
+        logger.warning("Could not retire review card %s", message_id)
 
 
 async def _show_draft(
