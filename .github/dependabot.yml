@@ -1,0 +1,64 @@
+# Version updates. Security updates (CVE fixes) are switched on in the repo's
+# Settings > Code security, not here, but they reuse the options below.
+#
+# Commit prefixes matter for release-please: `fix(deps)` bumps the patch
+# version and ships, `chore(deps)` lands without cutting a release. Runtime
+# Python deps and the Lambda image use `fix` so an update reaches production;
+# dev deps, Actions, and Terraform providers use `chore`.
+version: 2
+
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "fix"
+      prefix-development: "chore"
+      include: "scope"
+    groups:
+      python-minor-and-patch:
+        update-types: ["minor", "patch"]
+        applies-to: version-updates
+      python-security:
+        update-types: ["minor", "patch"]
+        applies-to: security-updates
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "fix"
+      include: "scope"
+    ignore:
+      # The Lambda base image tag pins the Python runtime; move it on purpose.
+      - dependency-name: "*lambda/python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "terraform"
+    directory: "/infra/terraform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      terraform-providers:
+        patterns: ["*"]
