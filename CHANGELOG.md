@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.3](https://github.com/iamtokarev/backlog-tamer/compare/v0.7.2...v0.7.3) (2026-10-25)
+
+
+### Bug Fixes
+
+* **deps:** upgrade locked packages to patch known CVEs ([69dad9c](https://github.com/iamtokarev/backlog-tamer/commit/69dad9cad204c7b56f099d39d252fad34d5e3031))
+* **deps:** upgrade locked packages to patch known CVEs ([7972e1a](https://github.com/iamtokarev/backlog-tamer/commit/7972e1adc4daccb9dfe9fb54dea403aa063bf5a5))
+
 ## [0.7.2](https://github.com/iamtokarev/backlog-tamer/compare/v0.7.1...v0.7.2) (2026-10-20)
 
 
