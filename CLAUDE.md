@@ -31,7 +31,7 @@ Merging to `main` does **not** deploy. Production ships from releases:
 1. Push conventional commits (`feat:`, `fix:`, …) to `main`. `release.yml` keeps a standing release PR open that bumps `pyproject.toml`, relocks `uv.lock`, and writes `CHANGELOG.md`.
 2. Merge the release PR. release-please tags `vX.Y.Z` and cuts a GitHub release, CI re-runs as a gate, then `deploy.yml` builds the arm64 image, pushes it to ECR tagged `vX.Y.Z`, applies Terraform, and smoke-tests both Lambdas.
 
-The smoke test invokes the worker with `{"healthcheck": true}` and asserts the reported version matches the tag, so a deploy that silently didn't take fails the job. `_healthcheck` in `lambda_handlers.py` eagerly imports the agent/Notion modules and calls `fetch_url.missing_optional_dependencies()` — the HTML and PDF extraction paths fall back silently when a dependency is missing from the image, so that probe is the only thing that surfaces it.
+The smoke test invokes the worker with `{"healthcheck": true}` and asserts the reported version matches the tag, so a deploy that silently didn't take fails the job. `_healthcheck` in `lambda_handlers.py` eagerly imports the agent, source reader, SDKs, and PDF parser and validates settings. Source extraction dependencies are required imports, so a missing dependency fails the image probe.
 
 Roll back by dispatching the Deploy workflow with a previous tag:
 
@@ -93,6 +93,10 @@ Three layers under `src/backlog_tamer/`:
 `dev/run_intake_workflow.py` runs the agent workflow standalone (in-memory sessions) without Telegram — useful for iterating on prompts/schema.
 
 LangSmith tracing is configured lazily in `TriageWorkflow.from_settings` when `LANGSMITH_API_KEY` is set.
+
+Source reading lives in `integrations/source_reader.py`. Its `SourceReader.read` interface returns `FetchedUrl` Grounding. All retrieval uses Browserbase: raw Fetch resolves redirects and content types, Fetch JSON extracts HTML, and hosted Stagehand automatically renders insufficient or known dynamic sources. YouTube/X oEmbed and PDF parsing retain their specialized interpretation. SDK clients and browser sessions are owned by each read because Lambda creates a new event loop for each invocation. The async ADK `fetch_url` adapter reuses successful Grounding in Intake session state; Retry fetch clears that state before Revision.
+
+`BROWSERBASE_API_KEY` is required locally and in the deployed runtime secret. Stagehand uses Browserbase Model Gateway for extraction. URL identity helpers shared with maintenance scripts live in `source_urls.py`. Local public-address validation covers inputs and Fetch redirects; Browserbase owns remote DNS and egress. The lockfile's WebSocket override reconciles Stagehand v4 with ADK's version pin for this application's HTTP-backed `run_async` workflow. When changing those dependencies, verify the locked suite and a live source-backed Triage turn.
 
 ## Infrastructure
 

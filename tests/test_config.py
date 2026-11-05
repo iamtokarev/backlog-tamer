@@ -16,6 +16,7 @@ def settings_env(tmp_path, monkeypatch):
         "AGENT__REASONING_EFFORT",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("BROWSERBASE_API_KEY", "test-browserbase-key")
     monkeypatch.setenv("TELEGRAM__BOT_TOKEN", "test-bot-token")
     monkeypatch.setenv("TELEGRAM__ALLOWED_USER_ID", "42")
     monkeypatch.setenv("NOTION_PROJECTS_DATABASE_ID", "test-projects-db")
@@ -78,3 +79,13 @@ def test_nested_dotenv_model_and_reasoning_overrides(settings_env):
 
     assert settings.agent.model == "anthropic/claude-sonnet-5"
     assert settings.agent.reasoning_effort == "none"
+
+
+@pytest.mark.parametrize("key", [None, "", "   "])
+def test_browserbase_key_is_required(settings_env, monkeypatch, key):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.delenv("BROWSERBASE_API_KEY", raising=False)
+    if key is not None:
+        monkeypatch.setenv("BROWSERBASE_API_KEY", key)
+    with pytest.raises(ValidationError, match="browserbase_api_key"):
+        Settings()

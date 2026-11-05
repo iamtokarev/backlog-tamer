@@ -17,6 +17,7 @@ class AgentConfig(BaseSettings):
 
 class Settings(BaseSettings):
     openrouter_api_key: SecretStr
+    browserbase_api_key: SecretStr
     agent: AgentConfig = Field(default_factory=AgentConfig)
     telegram: TelegramConfig
 
@@ -38,11 +39,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("openrouter_api_key")
+    @field_validator("openrouter_api_key", "browserbase_api_key")
     @classmethod
-    def validate_openrouter_api_key(cls, value: SecretStr) -> SecretStr:
+    def validate_provider_api_key(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().strip():
-            raise ValueError("OPENROUTER_API_KEY must not be blank.")
+            raise ValueError("Provider API key must not be blank.")
         return value
 
     def export_to_env(self) -> None:

@@ -49,7 +49,7 @@ The `effective_short_name` property returns `short_name` when set, otherwise the
 
 ### FetchedUrl
 
-Result of the `fetch_url` tool. Stored in session state under `fetched_context`.
+Result of the `SourceReader.read` call, surfaced to the agent through the `fetch_url` tool adapter and stored in session state under `fetched_context`. Defined in `src/backlog_tamer/integrations/source_reader.py`. See [Source Reader](../integrations/source-reader.md).
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -260,7 +260,8 @@ Created in the tasks database for each entry in `draft.tasks`:
 
 | File | Purpose |
 |------|---------|
-| `src/backlog_tamer/agents/intake_triage/schemas.py` | `IncomingContext`, `ProjectDraft` (with `short_name`, `effective_short_name`, `migrate_legacy_resource_type`), `FetchedUrl`, `DraftGrounding`, `SourceLink`, `ReviewDecision` |
+| `src/backlog_tamer/agents/intake_triage/schemas.py` | `IncomingContext`, `ProjectDraft` (with `short_name`, `effective_short_name`, `migrate_legacy_resource_type`), `DraftGrounding`, `SourceLink`, `ReviewDecision` |
+| `src/backlog_tamer/integrations/source_reader.py` | `FetchedUrl` Grounding model |
 | `src/backlog_tamer/agents/intake_triage/triage_workflow.py` | `Checkpoint` (opaque resume coordinates stored on `ConfirmationRecord`), `TurnOutcome` |
 | `src/backlog_tamer/agents/intake_triage/task_names.py` | Default task name composition (`compose_task_names`, `with_composed_task_names`) |
 | `src/backlog_tamer/application/models.py` | `ConfirmationRecord`, `ConfirmationStatus`, `ManualEdit`, `IntakeResult` |

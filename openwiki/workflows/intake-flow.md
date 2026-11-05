@@ -38,7 +38,7 @@ flowchart TD
 
 | Node | File | Behavior |
 |------|------|----------|
-| `draft_agent` | `agent.py` | LLM agent with `output_schema=ProjectDraft`, `output_key="draft_proposal"`. Can call `fetch_url` tool. |
+| `draft_agent` | `agent.py` | LLM agent with `output_schema=ProjectDraft`, `output_key="draft_proposal"`. Can call the `fetch_url` tool, a thin caching adapter over `SourceReader` (see [Source Reader](../integrations/source-reader.md)). |
 | `request_human_review` | `workflow.py` | Coerces draft, builds snapshot, emits `RequestInput` interrupt with `interrupt_id="human_review"`. |
 | `handle_human_review` | `workflow.py` | Normalizes feedback: "approve" → route `approved`, "reject" → route `rejected`, anything else → route `revise` with feedback in state. |
 | `finalize_approval` | `workflow.py` | Returns a terminal string. Actual Notion write happens in `IntakeService.finalize_approval`. |
@@ -128,11 +128,11 @@ The rewrite is idempotent and narrow by design: a name that already reads `"<ver
 
 ### Refetch After Failed Page Fetch
 
-When the fetch tool fails, the review card shows a warning and a "Retry fetch" button. Tapping it calls `IntakeService.refetch`, which delegates to `TriageWorkflow.refetch`. That clears the `fetch_url` cache (so the cached failure is not returned again) and resumes the paused turn with `REFETCH_FEEDBACK`, producing a new draft from fresh page content.
+When the fetch tool fails, the review card shows a warning and a "Retry fetch" button. Tapping it calls `IntakeService.refetch`, which delegates to `TriageWorkflow.refetch`. That clears the saved Grounding in session state (so the cached failure is not returned again — the `fetch_url` adapter only reuses successful results) and resumes the paused turn with `REFETCH_FEEDBACK`, producing a new draft from fresh page content.
 
 ### Duplicate Detection
 
-Before creating a new project, `finalize_approval` calls `NotionWriter.find_project_by_source` with the draft's canonical URL (from grounding) or source URL. `NotionWriter` stores the canonical URL via `commit_source_url(draft, grounding)` (preferring `grounding.canonical_url` over `draft.source_url`), and `fetch_url` strips campaign parameters (`utm_*`, `fbclid`, `gclid`, etc.) from the normalized URL, so a re-capture of the same page through a different tracking link can match the earlier row. If an existing project with that URL is found, the confirmation is marked `DUPLICATE` instead of `COMMITTED`, and the user is offered "Open existing" and "Add task there" buttons. Choosing "Add task there" calls `IntakeService.add_to_existing_project`, which attaches the draft's tasks to the existing project page.
+Before creating a new project, `finalize_approval` calls `NotionWriter.find_project_by_source` with the draft's canonical URL (from grounding) or source URL. `NotionWriter` stores the canonical URL via `commit_source_url(draft, grounding)` (preferring `grounding.canonical_url` over `draft.source_url`), and `normalize_source_url` in `source_urls.py` strips campaign parameters (`utm_*`, `fbclid`, `gclid`, etc.) from the normalized URL, so a re-capture of the same page through a different tracking link can match the earlier row. If an existing project with that URL is found, the confirmation is marked `DUPLICATE` instead of `COMMITTED`, and the user is offered "Open existing" and "Add task there" buttons. Choosing "Add task there" calls `IntakeService.add_to_existing_project`, which attaches the draft's tasks to the existing project page.
 
 ### Undo
 
@@ -189,4 +189,6 @@ stateDiagram-v2
 | `src/backlog_tamer/application/intake_service.py` | `start_intake`, `approve`, `reject`, `revise`, `refetch`, `finalize_approval`, `undo_commit`, `add_to_existing_project`, `_known_topics`, `_log_corrections` |
 | `src/backlog_tamer/application/confirmation_store.py` | `mark_committing_once` and all status transitions |
 | `src/backlog_tamer/application/models.py` | `ConfirmationStatus` enum |
+| `src/backlog_tamer/integrations/source_reader.py` | `SourceReader` — Browserbase + Stagehand source reading behind the `fetch_url` tool |
+| `src/backlog_tamer/source_urls.py` | `normalize_source_url`, `strip_tracking_params`, `youtube_watch_url` for canonical duplicate detection |
 | `src/backlog_tamer/dev/run_intake_workflow.py` | Standable workflow runner for dev |

@@ -3,10 +3,11 @@ from google.adk.models.lite_llm import LiteLlm
 from pydantic import SecretStr
 
 from backlog_tamer.config import AgentConfig, get_settings
+from backlog_tamer.integrations.source_reader import SourceReader
 
 from .prompts import INTAKE_TRIAGE_INSTRUCTIONS
 from .schemas import ProjectDraft
-from .tools.fetch_url import fetch_url
+from .tools.fetch_url import make_fetch_url_tool
 from .workflow import DRAFT_PROPOSAL_STATE_KEY, build_intake_workflow
 
 settings = get_settings()
@@ -33,7 +34,11 @@ draft_agent = Agent(
     instruction=INTAKE_TRIAGE_INSTRUCTIONS,
     output_schema=ProjectDraft,
     output_key=DRAFT_PROPOSAL_STATE_KEY,
-    tools=[fetch_url],
+    tools=[
+        make_fetch_url_tool(
+            SourceReader.from_api_key(settings.browserbase_api_key.get_secret_value())
+        )
+    ],
 )
 
 root_agent = build_intake_workflow(draft_agent)

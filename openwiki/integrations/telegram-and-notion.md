@@ -27,10 +27,9 @@ All three entry points build the same `python-telegram-bot` `Application` via `b
 
 `worker_handler` dispatches to a `_healthcheck()` function when the event contains `{"healthcheck": true}`. This is invoked by the [deploy workflow's smoke test](../operations/deployment.md) to verify the deployed image can do real work before traffic reaches it:
 
-1. Eagerly imports the agent (`agent`, `workflow`), Notion (`writer`), and fetch_url modules — these are otherwise only loaded on the first real message, so a broken image would surface as a failed user message instead of a failed deploy. The full `Settings` model is then validated via `_get_settings()`, so a misconfigured runtime secret (e.g. a missing `OPENROUTER_API_KEY`) fails the healthcheck rather than the first user message.
-2. Calls `fetch_url.missing_optional_dependencies()` to check that `beautifulsoup4` and `pypdf` are installed. Both loaders swallow `ImportError` and fall back silently, so a missing dependency degrades output quality without ever raising. The healthcheck surfaces this.
-3. Probes the Notion databases via `NotionWriter.describe_schema()` and raises if `is_healthy` is false — a property renamed in Notion otherwise surfaces as a 400 during `finalize_approval`, after the user has already approved the draft. (`NotionSchemaReport.is_healthy` is false when `missing_project_properties` or `missing_task_properties` is non-empty.)
-4. Reads the installed package version via `importlib.metadata.version("backlog-tamer")` and returns `{"ok": true, "version": "...", "skipped_notion_properties": [...], "degraded_capabilities": [...]}`. The deploy workflow asserts the version matches the release tag. `degraded_capabilities` surfaces schema gaps that disable a feature rather than just blanking a field — currently a missing `Source` column disables `"duplicate-detection"`. `skipped_notion_properties` lists optional columns the workspace has not added yet.
+1. Eagerly imports the agent (`agent`, `workflow`), Notion (`writer`), and `source_reader` modules — these are otherwise only loaded on the first real message, so a broken image would surface as a failed user message instead of a failed deploy. The full `Settings` model is then validated via `_get_settings()`, so a misconfigured runtime secret (e.g. a missing `OPENROUTER_API_KEY` or `BROWSERBASE_API_KEY`) fails the healthcheck rather than the first user message.
+2. Probes the Notion databases via `NotionWriter.describe_schema()` and raises if `is_healthy` is false — a property renamed in Notion otherwise surfaces as a 400 during `finalize_approval`, after the user has already approved the draft. (`NotionSchemaReport.is_healthy` is false when `missing_project_properties` or `missing_task_properties` is non-empty.) Source extraction dependencies (`browserbase`, `stagehand`, `pypdf`) are required imports of `source_reader`, so a missing dependency fails the eager import (and thus the image probe) rather than degrading silently.
+3. Reads the installed package version via `importlib.metadata.version("backlog-tamer")` and returns `{"ok": true, "version": "...", "skipped_notion_properties": [...], "degraded_capabilities": [...]}`. The deploy workflow asserts the version matches the release tag. `degraded_capabilities` surfaces schema gaps that disable a feature rather than just blanking a field — currently a missing `Source` column disables `"duplicate-detection"`. `skipped_notion_properties` lists optional columns the workspace has not added yet.
 
 ### Handler Logic
 
@@ -39,7 +38,7 @@ All three entry points build the same `python-telegram-bot` `Application` via `b
 - **`handle_message`** — processes text/caption messages from the allowed user. If a revision is pending for this chat (checked via `TelegramStateStore`), routes the text as revision feedback. Otherwise, calls `IntakeService.start_intake` with an `IncomingContext` parsed from the message. Shows a progress message while the agent works.
 - **`handle_callback`** — processes inline-keyboard callbacks. Beyond the original `approve`/`revise`/`reject`, it now handles:
   - **Quick edits** (`edit`, `pick`, `back`) — opens a field picker, applies a one-tap change to priority/intent/project type without re-running the agent, or returns to the review keyboard. Calls `IntakeService.apply_quick_edit` (which delegates to `ConfirmationStore.apply_manual_edit`).
-  - **Refetch** (`refetch`) — clears the fetch_url cache and re-runs the agent with a "fetch again" instruction via `IntakeService.refetch`, for when the original page fetch failed.
+  - **Refetch** (`refetch`) — clears the saved Grounding in session state and re-runs the agent with a "fetch again" instruction via `IntakeService.refetch`, for when the original page fetch failed.
   - **Retry** (`retry`) — re-attempts the Notion write after a FAILED status.
   - **Undo** (`undo`) — archives the Notion pages created by a committed confirmation via `IntakeService.undo_commit`.
   - **Add task** (`addtask`) — attaches this draft's tasks to an existing duplicate project via `IntakeService.add_to_existing_project`.
@@ -152,7 +151,7 @@ The Notion projects database must have properties named: `Project name`, `Status
 
 - **Dry-run is the default.** `--apply` writes; a dry run prints what would change.
 - **Additive only.** It adds columns and fills them where empty. It never edits `Tags`, `Summary`, `Status`, `Priority`, names, page bodies, or relations.
-- **Backfill sources:** `Source` from the bookmark block the writer already places at the top of each page body (falling back to a URL in `Summary`), `Captured` from `created_time`, and `Project type`/`Intent` from the legacy values still sitting in `Tags` (`LEGACY_TAG_TO_PROJECT_TYPE` / `LEGACY_TAG_TO_INTENT`). URLs are canonicalized via `strip_tracking_params` from `fetch_url`.
+- **Backfill sources:** `Source` from the bookmark block the writer already places at the top of each page body (falling back to a URL in `Summary`), `Captured` from `created_time`, and `Project type`/`Intent` from the legacy values still sitting in `Tags` (`LEGACY_TAG_TO_PROJECT_TYPE` / `LEGACY_TAG_TO_INTENT`). URLs are parsed with the standard library, then campaign-canonicalized via `strip_tracking_params` (imported from `backlog_tamer.source_urls`), so backfilled Source values match the way live captures are normalized for duplicate detection.
 - **Snapshot first.** With `--apply`, every page is snapshotted to `notion-projects-snapshot-<timestamp>.json` before any write. Snapshots are git-ignored (`.gitignore`).
 
 Run from the repo root with `NOTION_TOKEN`, `NOTION_PROJECTS_DATABASE_ID`, and `NOTION_TASKS_DATABASE_ID` configured:
@@ -161,6 +160,10 @@ Run from the repo root with `NOTION_TOKEN`, `NOTION_PROJECTS_DATABASE_ID`, and `
 uv run python scripts/migrate_notion_schema.py            # dry run
 uv run python scripts/migrate_notion_schema.py --apply     # add columns + backfill
 ```
+
+## Source Reading
+
+Source reading — turning a public URL into the `FetchedUrl` Grounding the agent drafts from — is a separate integration backed by Browserbase and Stagehand. It is documented in [Source Reader](source-reader.md): the extraction escalation ladder (Fetch API → structured Fetch JSON → hosted Stagehand rendering), local SSRF validation, YouTube/X oEmbed and PDF specialization, the per-invocation SDK client lifecycle, and the thin `fetch_url` tool adapter that caches successful Grounding in ADK session state.
 
 ## Source References
 
@@ -175,5 +178,6 @@ uv run python scripts/migrate_notion_schema.py --apply     # add columns + backf
 | `src/backlog_tamer/integrations/telegram/rendering.py` | HTML rendering, inline keyboards, picker keyboards, terminal keyboards |
 | `src/backlog_tamer/integrations/telegram/state.py` | `TelegramStateStore` (revision tracking, update dedup) |
 | `src/backlog_tamer/integrations/notion/writer.py` | `NotionWriter` |
-| `src/backlog_tamer/agents/intake_triage/tools/fetch_url.py` | `missing_optional_dependencies()` used by Lambda healthcheck; `strip_tracking_params` reused by the migration script; `youtube_watch_url` normalizes all YouTube link variants to a single watch URL so the canonical URL is not `youtube.com/undefined` |
+| `src/backlog_tamer/integrations/source_reader.py` | `SourceReader` (Browserbase + Stagehand) behind the `fetch_url` tool; see [Source Reader](source-reader.md) |
+| `src/backlog_tamer/source_urls.py` | `normalize_source_url`, `strip_tracking_params`, `youtube_watch_url` for canonical duplicate detection |
 | `scripts/migrate_notion_schema.py` | One-time Notion schema migration: add optional columns and backfill them |
