@@ -38,7 +38,7 @@ cp .env.example .env   # fill in the values below
 make run               # polling bot; see the Makefile for webhook, test and lint targets
 ```
 
-You need a Telegram bot token plus your user ID (only that user is served), an [OpenRouter](https://openrouter.ai) key, a Notion integration token with your Projects and Tasks database IDs, and a `DATABASE_URL`. SQLite is fine locally.
+You need a Telegram bot token plus your user ID (only that user is served), an [OpenRouter](https://openrouter.ai) key, a [Browserbase](https://www.browserbase.com) key for source reading, a Notion integration token with your Projects and Tasks database IDs, and a `DATABASE_URL`. SQLite is fine locally.
 
 To set up the Notion databases, run `uv run python scripts/migrate_notion_schema.py`. By default it only shows which columns are missing. Add `--apply` to create them. The required and optional columns are listed in [CLAUDE.md](CLAUDE.md#notion-database-schema).
 
@@ -49,5 +49,7 @@ Production runs on AWS Lambda (webhook receiver → SQS → worker), with infras
 ```sh
 gh workflow run deploy.yml -f version=v0.6.0
 ```
+
+Before releasing a source-reader change, add `BROWSERBASE_API_KEY` to the existing runtime secret selected by Terraform’s `runtime_secret_arn` or the Lambda’s `BACKLOG_TAMER_SECRET_ARN`.
 
 One-time setup: point the Telegram webhook at the webhook Lambda's Function URL, using `TELEGRAM__WEBHOOK_SECRET` as the secret token. Details are in [CLAUDE.md](CLAUDE.md#releases-and-deploys).

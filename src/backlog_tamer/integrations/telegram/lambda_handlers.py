@@ -85,16 +85,10 @@ def _healthcheck() -> dict[str, Any]:
     from importlib.metadata import version
 
     from backlog_tamer.agents.intake_triage import agent, workflow  # noqa: F401
-    from backlog_tamer.agents.intake_triage.tools import fetch_url
+    from backlog_tamer.integrations import source_reader  # noqa: F401
     from backlog_tamer.integrations.notion import NotionWriter
 
     settings = _get_settings()
-
-    missing = fetch_url.missing_optional_dependencies()
-    if missing:
-        raise RuntimeError(
-            f"Deployed image is missing extraction dependencies: {', '.join(missing)}"
-        )
 
     # A property renamed in Notion otherwise surfaces as a 400 during
     # finalize_approval, after the user has already approved the draft.

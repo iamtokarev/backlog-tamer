@@ -25,7 +25,6 @@ from backlog_tamer.database_urls import (
 from .prompts import REFETCH_FEEDBACK, build_revision_feedback
 from .schemas import DraftGrounding, IncomingContext, ProjectDraft
 from .task_names import with_composed_task_names
-from .tools import fetch_url
 from .workflow import (
     DRAFT_PROPOSAL_STATE_KEY,
     FETCHED_CONTEXT_STATE_KEY,
@@ -147,13 +146,15 @@ class TriageWorkflow:
         checkpoint: Checkpoint,
         kept_fields: dict[str, str],
     ) -> TurnOutcome:
-        """Redraft from a fresh read of the source page.
-
-        The fetch cache goes first, or the agent would be handed the same
-        page it already read instead of reaching the site again.
-        """
-        fetch_url.clear_cache()
-        return await self.revise(checkpoint, REFETCH_FEEDBACK, kept_fields)
+        """Discard this Intake's saved Grounding before a fresh Revision."""
+        return await self._resume(
+            checkpoint,
+            build_review_reply(
+                ReviewDecision.REVISE,
+                build_revision_feedback(REFETCH_FEEDBACK, kept_fields),
+            ),
+            state_delta={FETCHED_CONTEXT_STATE_KEY: {}},
+        )
 
     async def approve(self, checkpoint: Checkpoint) -> TurnOutcome:
         return await self._resume(
@@ -167,11 +168,14 @@ class TriageWorkflow:
         self,
         checkpoint: Checkpoint,
         reply: dict[str, str],
+        *,
+        state_delta: dict[str, Any] | None = None,
     ) -> TurnOutcome:
         events = await self._run_turn(
             user_id=checkpoint.user_id,
             session_id=checkpoint.session_id,
             invocation_id=checkpoint.invocation_id,
+            state_delta=state_delta,
             message=types.Content(
                 role="user",
                 parts=[

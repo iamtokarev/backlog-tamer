@@ -29,7 +29,6 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
-from backlog_tamer.agents.intake_triage.tools.fetch_url import strip_tracking_params
 from backlog_tamer.config import get_settings
 from backlog_tamer.integrations.notion.writer import (
     PROJECT_CAPTURED_PROPERTY,
@@ -40,6 +39,7 @@ from backlog_tamer.integrations.notion.writer import (
     PROJECT_TYPE_PROPERTY,
     TASK_SOURCE_PROPERTY,
 )
+from backlog_tamer.source_urls import strip_tracking_params
 
 NOTION_API = "https://api.notion.com/v1"
 

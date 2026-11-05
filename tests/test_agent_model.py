@@ -29,6 +29,7 @@ def model_factory(tmp_path, monkeypatch):
     for key in ("AGENT__MODEL", "AGENT__REASONING_EFFORT", "AGENT__OPENAI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("BROWSERBASE_API_KEY", "test-browserbase-key")
     monkeypatch.setenv("TELEGRAM__BOT_TOKEN", "test-bot-token")
     monkeypatch.setenv("TELEGRAM__ALLOWED_USER_ID", "42")
     monkeypatch.setenv("NOTION_PROJECTS_DATABASE_ID", "test-projects-db")

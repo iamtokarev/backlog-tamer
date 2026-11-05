@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from backlog_tamer.agents.intake_triage.tools import fetch_url
 from backlog_tamer.config import get_settings
 from backlog_tamer.integrations.notion import NotionSchemaReport, NotionWriter
 from backlog_tamer.integrations.telegram.lambda_handlers import (
@@ -20,6 +19,7 @@ from backlog_tamer.integrations.telegram.lambda_handlers import (
 # explicitly rather than leaning on a local .env file that CI does not have.
 REQUIRED_SETTINGS_ENV = {
     "OPENROUTER_API_KEY": "test-openrouter-key",
+    "BROWSERBASE_API_KEY": "test-browserbase-key",
     "TELEGRAM__BOT_TOKEN": "test-bot-token",
     "TELEGRAM__ALLOWED_USER_ID": "42",
     "NOTION_TOKEN": "test-notion-token",
@@ -176,22 +176,16 @@ def test_worker_handler_healthcheck_reports_version(healthcheck_env):
     assert result["version"]
 
 
-def test_worker_handler_healthcheck_fails_on_missing_extraction_dependency(
+def test_worker_handler_healthcheck_requires_browserbase_key(
     healthcheck_env,
     monkeypatch,
 ):
-    monkeypatch.setattr(
-        "backlog_tamer.agents.intake_triage.tools.fetch_url"
-        ".missing_optional_dependencies",
-        lambda: ["beautifulsoup4"],
-    )
+    from pydantic import ValidationError
 
-    with pytest.raises(RuntimeError, match="beautifulsoup4"):
+    monkeypatch.delenv("BROWSERBASE_API_KEY")
+    get_settings.cache_clear()
+    with pytest.raises(ValidationError, match="browserbase_api_key"):
         worker_handler({"healthcheck": True}, SimpleNamespace())
-
-
-def test_missing_optional_dependencies_is_empty_when_installed():
-    assert fetch_url.missing_optional_dependencies() == []
 
 
 def _lambda_event(payload: dict, *, secret: str) -> dict:

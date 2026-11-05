@@ -23,9 +23,9 @@ The AI triage layer. A Google ADK `Agent` wraps an OpenRouter model through ADK'
 - **`triage_workflow.py`** — `TriageWorkflow`, the agent-layer facade that owns the ADK `Runner` and `DatabaseSessionService`. Its methods (`start`, `revise`, `refetch`, `approve`, `reject`) each run one ADK turn and return a `TurnOutcome`: `NeedsReview` (draft + `Checkpoint` + grounding + review message), `Approved`, or `Rejected` (with the draft for the review card). `from_settings` lazily imports the agent module so the LLM client is only built when a workflow is actually constructed. The opaque `Checkpoint` dataclass bundles the `session_id`, `invocation_id`, and `request_input_call_id` needed to resume a paused turn.
 - **`workflow.py`** — builds the ADK `Workflow` graph: `draft → request_human_review → handle_human_review → {approved, rejected, revise}`. The `request_human_review` node emits a `RequestInput` interrupt that pauses execution until the user responds. `build_triage_message`/`build_triage_state_delta` thread the workspace's existing Notion tag vocabulary (`known_topics`) into the drafting prompt.
 - **`prompts.py`** — system instructions, triage prompt templates (with the compact `project_type` vocabulary and the existing-tags hint), review message templates, revision prompt builder, `REFETCH_FEEDBACK` (the instruction sent on a refetch turn), and `build_revision_feedback` (prepends the user's quick-edit `kept_fields` so a revision does not silently undo them).
-- **`schemas.py`** — Pydantic models: `IncomingContext`, `ProjectDraft` (with `short_name`, `effective_short_name`, `project_type`, and the `migrate_legacy_resource_type` validator), `FetchedUrl`, `DraftGrounding` (fetch results summary with `is_degraded` property), `SourceLink`, `ReviewDecision`.
+- **`schemas.py`** — Pydantic models: `IncomingContext`, `ProjectDraft` (with `short_name`, `effective_short_name`, `project_type`, and the `migrate_legacy_resource_type` validator), `DraftGrounding` (fetch results summary with `is_degraded` property), `SourceLink`, `ReviewDecision`. (`FetchedUrl` is defined only in `integrations/source_reader.py`; `schemas.py` neither defines nor re-exports it.)
 - **`task_names.py`** — composes the default task name as `"<verb>: <short_name>"` deterministically from intent/project type, instead of asking the model to name it each run.
-- **`tools/fetch_url.py`** — a tool the agent can call to fetch and extract context from web URLs, with SSRF protection, support for HTML, PDF, and X/Twitter oEmbed, YouTube watch-URL normalization, campaign-parameter stripping (for canonical duplicate detection), and page-furniture filtering out of key points.
+- **`tools/fetch_url.py`** — a thin ADK tool adapter (`make_fetch_url_tool`) that wraps a `SourceReader` and exposes it to the agent as a tool named `fetch_url`. It reuses a previously-saved successful `FetchedUrl` from session state without re-calling the provider, persists fresh results back into `fetched_context`, and never caches failures. The actual source reading — Browserbase Fetch API, hosted Stagehand rendering, PDF/oEmbed specialization, SSRF validation — lives in [Source Reader](../integrations/source-reader.md).
 
 The agent layer is detailed further in [Intake Workflow](../workflows/intake-flow.md).
 
@@ -44,6 +44,7 @@ External system connections. Telegram provides three entry points that all share
 
 - **`telegram/`** — `bot.py` (local polling), `webhook_dev.py` (local webhook server), `lambda_handlers.py` (deployed: webhook receives and enqueues to SQS, worker dequeues and processes). `handlers.py` contains the shared `handle_message` and `handle_callback` logic, handling approve/reject/revise plus quick edits, refetch, retry, undo, and add-task-to-duplicate. `webhook.py` has `TelegramUpdateProcessor` and webhook validation. `parsing.py` extracts `IncomingContext` from Telegram messages. `rendering.py` builds HTML messages, inline keyboards (review, picker, terminal), and change summaries. `state.py` persists revision state and deduplicates updates, using `NullPool` for external poolers.
 - **`notion/writer.py`** — `NotionWriter` creates project pages (with page-body children: bookmark, note, key points, to-do tasks, provenance callout) and task pages in Notion databases. Also performs duplicate detection (`find_project_by_source`), tag vocabulary lookup (`list_tag_options`, fed into the drafting prompt), schema fitting (`_fit_to_schema` drops properties missing from the target database, and renames `Project type` to legacy `Type` when needed; property definitions cached in `_schema_cache`), canonical source URL selection (`commit_source_url`), undo (`archive_pages`), and schema health reporting (`describe_schema` for the healthcheck, including `degraded_capabilities` for gaps that disable a feature). Sets page icons from project type, due dates from priority, and topic-based tags folded onto existing tag spellings.
+- **`source_reader.py`** — `SourceReader` reads a public URL into a `FetchedUrl` Grounding result (or a structured failure) through Browserbase Fetch API and hosted Stagehand rendering, with local SSRF validation, an extraction escalation ladder (oEmbed → Fetch raw → Fetch JSON → browser render), PDF parsing via `pypdf`, and a per-invocation client lifecycle for Lambda. URL identity helpers (`normalize_source_url`, `strip_tracking_params`, `youtube_watch_url`) live in `source_urls.py`. See [Source Reader](../integrations/source-reader.md).
 
 The integrations are detailed in [Telegram & Notion Integrations](../integrations/telegram-and-notion.md).
 
@@ -76,6 +77,11 @@ flowchart TD
         NW["NotionWriter create_project_with_tasks"]
     end
 
+    subgraph "Source Reading"
+        SR["SourceReader — Browserbase Fetch + Stagehand"]
+        FU["fetch_url tool adapter (caching)"]
+    end
+
     A1 --> H
     A2 --> H
     A3 --> H
@@ -83,11 +89,13 @@ flowchart TD
     IS -->|"delegates turn"| TW
     TW -->|"runs workflow"| WF
     WF -->|"persists sessions"| DS
+    WF -->|"agent calls fetch_url"| FU
+    FU -->|"reads URL"| SR
     IS -->|"persists confirmation"| CS
     IS -->|"on Approved"| NW
 ```
 
-*Three-layer architecture: Telegram entry points dispatch through shared handlers to IntakeService, which delegates each turn to TriageWorkflow and writes approved drafts to Notion.*
+*Three-layer architecture: Telegram entry points dispatch through shared handlers to IntakeService, which delegates each turn to TriageWorkflow and writes approved drafts to Notion. The agent's `fetch_url` tool adapts a `SourceReader` backed by Browserbase.*
 
 ## Key Design Decisions
 
@@ -99,7 +107,7 @@ flowchart TD
 - **SQS queue in production.** The Lambda webhook handler validates and enqueues; the Lambda worker handler dequeues and processes. This decouples Telegram's webhook timeout from the potentially slow agent workflow.
 - **OpenRouter via ADK `LiteLlm`, with native reasoning parameters.** The agent talks to OpenRouter exclusively through ADK's `LiteLlm` adapter (`agent.py::_get_model`), using `api_base="https://openrouter.ai/api/v1"` and the root `OPENROUTER_API_KEY` from `Settings` — direct OpenAI credentials and endpoints are no longer used. `AGENT__MODEL` is an OpenRouter slug including its publisher (default `openai/gpt-6-luna`; the adapter adds the `openrouter/` transport prefix), so a different publisher can be selected by changing one setting (e.g. `anthropic/claude-sonnet-5`). The adapter sends native `reasoning.effort` (from `AgentConfig`, default `"medium"`, settable via `AGENT__REASONING_EFFORT` with options `none`, `low`, `medium`, `high`) and `provider.require_parameters=true` through `extra_body` rather than relying on LiteLLM's model-metadata parameter whitelist. Explicit `reasoning.effort` preserves the configured medium effort by sending OpenRouter's native reasoning object, so the value is forwarded instead of being dropped silently through LiteLLM's parameter whitelist; `provider.require_parameters=true` selects endpoints that support the requested parameters (capability-aware routing, as OpenRouter's structured-output guidance recommends). The request shape — OpenRouter URL, bearer key, model slug, `reasoning`/`provider` body, publisher override, and auth-error propagation without fallback — is pinned by `tests/test_agent_model.py`.
 - **Classification as a correction signal, not a taxonomy.** A week of traces showed 7/7 approvals with zero revisions while classification was wrong: the review signal and the taxonomy had both stopped carrying information. The response (commit `e5ca04f`) expanded `project_type` with `article`, `video`, and `course`; composed the default task name deterministically in code (`task_names.py`) instead of leaving it to the prompt; replaced the "default to Medium" priority escape hatch with a rubric; fed the existing tag vocabulary into the prompt; stored the canonical source URL so duplicate detection could match; and recorded what the agent proposed beside what the user picked (`ManualEdit.before/after`, logged at approval) so quick-edit corrections became a measurable per-field accuracy signal.
-- **Canonical source URL for duplicate detection.** `fetch_url` strips campaign parameters (`utm_*`, `fbclid`, `gclid`, …) from the normalized URL, `NotionWriter` stores `grounding.canonical_url` via `commit_source_url`, and `find_project_by_source` looks up by canonical URL — so a re-capture of the same page through a different tracking link matches its earlier row instead of creating a duplicate. YouTube links are normalized to a single watch URL (`youtube_watch_url`) so `youtu.be`, `/shorts/`, `/live/`, `/embed/`, and `/v/` variants all resolve to `https://www.youtube.com/watch?v={id}`; the page's own JS-templated `<link rel="canonical">` can render as `youtube.com/undefined` to datacenter IPs, so the watch URL derived from the link is pinned instead.
+- **Canonical source URL for duplicate detection.** `normalize_source_url` (in `source_urls.py`) strips campaign parameters (`utm_*`, `fbclid`, `gclid`, …) from the normalized URL, `NotionWriter` stores `grounding.canonical_url` via `commit_source_url`, and `find_project_by_source` looks up by canonical URL — so a re-capture of the same page through a different tracking link matches its earlier row instead of creating a duplicate. YouTube links are normalized to a single watch URL (`youtube_watch_url`) so `youtu.be`, `/shorts/`, `/live/`, `/embed/`, and `/v/` variants all resolve to `https://www.youtube.com/watch?v={id}`; the page's own JS-templated `<link rel="canonical">` can render as `youtube.com/undefined` to datacenter IPs, so the watch URL derived from the link is pinned instead by the `SourceReader`. See [Source Reader](../integrations/source-reader.md).
 
 ## Source References
 
@@ -116,5 +124,7 @@ flowchart TD
 | `src/backlog_tamer/integrations/telegram/handlers.py` | Shared Telegram message/callback handlers |
 | `src/backlog_tamer/integrations/telegram/bot.py` | `build_application` + polling entry point |
 | `src/backlog_tamer/integrations/notion/writer.py` | Notion API writer |
+| `src/backlog_tamer/integrations/source_reader.py` | `SourceReader`, `FetchedUrl` Grounding, Browserbase + Stagehand extraction |
+| `src/backlog_tamer/source_urls.py` | `normalize_source_url`, `strip_tracking_params`, `youtube_watch_url` |
 | `scripts/migrate_notion_schema.py` | One-time Notion schema migration |
 | `src/backlog_tamer/config.py` | Settings model (pydantic-settings) |

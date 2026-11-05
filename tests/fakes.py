@@ -26,6 +26,7 @@ def build_settings(database_url: str = "sqlite:///:memory:") -> Settings:
     return Settings(
         _env_file=None,
         openrouter_api_key=SecretStr("test-openrouter-key"),
+        browserbase_api_key=SecretStr("test-browserbase-key"),
         telegram=TelegramConfig(
             bot_token=SecretStr("test-bot-token"),
             allowed_user_id=42,
