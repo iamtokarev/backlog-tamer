@@ -4,23 +4,7 @@ Backlog Tamer is a Telegram bot that turns messy learning/project inputs (links,
 
 ## Commands
 
-Uses `uv` for dependency management (Python 3.12+, package lives in `src/backlog_tamer`).
-
-```sh
-make run            # Run the Telegram bot with local polling
-make webhook-dev PUBLIC_URL=https://your-ngrok-url  # Local webhook server
-make test           # uv run pytest -v
-make lint           # uv run ruff check
-make lint-fix       # uv run ruff check --fix
-make format         # uv run ruff format
-make format-check   # uv run ruff format --check (CI enforces this)
-make webhook-info   # Inspect current Telegram webhook
-make webhook-clear  # Delete Telegram webhook
-```
-
-Run a single test: `uv run pytest tests/test_telegram_webhook.py -v` (or `-k <pattern>`). `pythonpath = ["src"]` is set in pyproject, so tests import `backlog_tamer` directly.
-
-CI runs `ruff format --check`, `ruff check`, and `pytest` with `--locked` — keep `uv.lock` in sync when changing dependencies.
+Use `mise tasks` to discover local commands and `mise run check` to run the Python CI checks. uv manages Python dependencies. Keep `uv.lock` in sync when changing them.
 
 Requires a `.env` file (see `.env.example`). Settings use pydantic-settings with `__` as the nested delimiter (e.g. `TELEGRAM__BOT_TOKEN` maps to `Settings.telegram.bot_token`); see `src/backlog_tamer/config.py`.
 

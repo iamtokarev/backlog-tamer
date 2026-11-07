@@ -1,0 +1,56 @@
+min_version = "2026.4.16"
+
+[tools]
+uv = "0.11.33"
+
+[tasks.setup]
+description = "Install locked Python dependencies"
+run = "uv sync --locked"
+
+[tasks.bot]
+description = "Run the Telegram bot in polling mode"
+env = { PYTHONPATH = "src" }
+run = "uv run --locked python -m backlog_tamer.integrations.telegram.bot"
+
+[tasks.webhook]
+description = "Run the local Telegram webhook server"
+env = { PYTHONPATH = "src" }
+raw_args = true
+run = "uv run --locked python -m backlog_tamer.integrations.telegram.webhook_dev"
+
+[tasks."webhook:info"]
+description = "Inspect the bot's registered Telegram webhook"
+run = "sh scripts/telegram_webhook.sh info"
+
+[tasks."webhook:clear"]
+description = "Delete the bot's registered Telegram webhook"
+run = "sh scripts/telegram_webhook.sh clear"
+
+[tasks.check]
+description = "Check formatting, lint, and run the test suite"
+depends = ["format:check", "lint", "test"]
+
+[tasks."format:check"]
+description = "Check Python formatting"
+run = "uv run --locked ruff format --check"
+
+[tasks.format]
+description = "Format Python files"
+run = "uv run --locked ruff format"
+
+[tasks.lint]
+description = "Lint Python files"
+run = "uv run --locked ruff check"
+
+[tasks."lint:fix"]
+description = "Apply Ruff's safe lint fixes"
+run = "uv run --locked ruff check --fix"
+
+[tasks.test]
+description = "Run pytest, optionally with a file or filter"
+raw_args = true
+run = "uv run --locked pytest -q"
+
+[tasks.unhide-venv]
+description = "Show .venv in Finder on macOS"
+run = "chflags -R nohidden .venv"
