@@ -4,7 +4,7 @@ Everything you need to run Backlog Tamer locally and deploy it. For the architec
 
 ## Requirements
 
-- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
+- [mise](https://mise.jdx.dev). It installs the pinned uv, which manages Python 3.12+ and the dependencies.
 - A Telegram bot token and your Telegram user ID. Only that user is served.
 - An [OpenRouter](https://openrouter.ai) API key for the drafting agent
 - A [Browserbase](https://www.browserbase.com) API key for source reading
@@ -14,6 +14,8 @@ Everything you need to run Backlog Tamer locally and deploy it. For the architec
 ## Configure
 
 ```sh
+mise install
+mise run setup         # uv sync --locked
 cp .env.example .env
 ```
 
@@ -39,23 +41,25 @@ Settings use `__` as the nested delimiter, so `TELEGRAM__BOT_TOKEN` maps to `Set
 
 | Command | Does |
 |---|---|
-| `make run` | Telegram bot with local polling |
-| `make webhook-dev PUBLIC_URL=https://…` | Local webhook server behind a tunnel such as ngrok |
-| `make test` | Run the test suite |
-| `make lint` / `make format-check` | ruff, the same checks CI runs |
-| `make webhook-info` / `make webhook-clear` | Inspect or delete the Telegram webhook |
+| `mise run bot` | Telegram bot with local polling |
+| `mise run webhook --public-url https://…` | Local webhook server behind a tunnel such as ngrok |
+| `mise run check` | Format check, lint and tests, the same checks CI runs |
+| `mise run test` | Tests only; pass a file or `-k <pattern>` to narrow |
+| `mise run webhook:info` / `mise run webhook:clear` | Inspect or delete the Telegram webhook |
+
+`mise tasks` lists everything, and `mise -E infra tasks` adds the Terraform tasks.
 
 To iterate on the agent without Telegram, run the workflow on its own with in-memory sessions:
 
 ```sh
-uv run python -m backlog_tamer.dev.run_intake_workflow
+mise exec -- uv run --locked python -m backlog_tamer.dev.run_intake_workflow
 ```
 
 ## Set up the Notion databases
 
 ```sh
-uv run python scripts/migrate_notion_schema.py          # dry run: shows missing columns
-uv run python scripts/migrate_notion_schema.py --apply  # creates them and backfills
+mise exec -- uv run --locked python scripts/migrate_notion_schema.py          # dry run: shows missing columns
+mise exec -- uv run --locked python scripts/migrate_notion_schema.py --apply  # creates them and backfills
 ```
 
 The required and optional columns are listed in [CLAUDE.md](../CLAUDE.md#notion-database-schema).

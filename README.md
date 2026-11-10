@@ -49,8 +49,9 @@ The review step is a Google ADK interrupt, not a chat turn, so free text can nev
 
 ```sh
 git clone https://github.com/iamtokarev/backlog-tamer && cd backlog-tamer
+mise install && mise run setup
 cp .env.example .env   # telegram, openrouter, browserbase, notion keys
-make run
+mise run bot
 ```
 
 Configuration, Notion setup and AWS deploy: [docs/setup.md](docs/setup.md)
