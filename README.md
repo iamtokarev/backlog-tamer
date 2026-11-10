@@ -1,61 +1,73 @@
-# Backlog Tamer
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/header-dark.svg">
+    <img src="docs/assets/header-light.svg" width="840" alt="backlog-tamer: links in, decided backlog out. You approve every write.">
+  </picture>
+</p>
 
-A Telegram bot that turns links and notes into decided Notion backlog items. You send it something you found. It drafts what the thing is, why you saved it, and the next steps. Nothing reaches Notion until you approve.
+<p align="center">
+  <a href="#what-it-does">what it does</a> &nbsp;/&nbsp;
+  <a href="#review-in-one-tap">review</a> &nbsp;/&nbsp;
+  <a href="#how-it-works">how it works</a> &nbsp;/&nbsp;
+  <a href="#run-it">run it</a>
+</p>
 
-```
-You   https://github.com/google/adk-python  try this for the triage agent
+<p align="center">
+  <img src="docs/assets/terminal.svg" width="840" alt="Terminal recording of one intake: you send a GitHub link with a note, the bot reads the page, drafts 'ADK for Python' (repository, build, High) with two tasks, waits for review, and after approval saves one project and two tasks to Notion.">
+</p>
 
-Bot   ADK for Python
-      📦 repository · 🔨 build · 🔺 High
+<p align="center">
+  <a href="https://github.com/iamtokarev/backlog-tamer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/iamtokarev/backlog-tamer/ci.yml?branch=main&style=flat-square&label=ci&labelColor=21262d" alt="CI status"></a>
+  <a href="https://github.com/iamtokarev/backlog-tamer/releases"><img src="https://img.shields.io/github/v/release/iamtokarev/backlog-tamer?style=flat-square&label=release&labelColor=21262d&color=1f6feb" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/python-3.12%2B-1f6feb?style=flat-square&labelColor=21262d" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/agent-google--adk-8957e5?style=flat-square&labelColor=21262d" alt="Agent built on Google ADK">
+</p>
 
-      Google's toolkit for building agents as code-first workflows,
-      with sessions, tools and human-in-the-loop interrupts.
+## What it does
 
-      🔗 github.com · GitHub
-      ☑︎ Run the quickstart agent locally
-      ☑︎ Prototype the review step as an interrupt
+<p align="center">
+  <img src="docs/assets/features.svg" width="840" alt="Four things it does. Read: understands what you sent, including web pages, GitHub repos, YouTube, X posts and PDFs, rendering dynamic pages in a real browser and saying so when it can't read the source. Draft: proposes a decision with a type, an intent, a priority and next steps. Review: waits until you approve, reject, edit a field, or reply with a note. Commit: writes a Project with linked Tasks to Notion, flags duplicates, and offers Undo.">
+</p>
 
-      [ ✅ Approve & save ]  [ ❌ Reject ]
-      [ 🔺 High ▸ ]  [ 🔨 build ▸ ]  [ 📦 repository ▸ ]
-      [ 📝 Revise with a note ]
-```
+## Review in one tap
 
-Tap **Approve** and the card collapses to `✅ Saved to Notion · 2 tasks`, with **Open in Notion** and **Undo** buttons.
+<p align="center">
+  <img src="docs/assets/review.svg" width="840" alt="The draft card offers Approve and save, Reject, and chips for priority and intent. Tapping the priority chip lets you pick High, Medium or Low, and that choice is kept through redrafts. After approval the card reads Saved to Notion, 2 tasks, with Open in Notion and Undo buttons.">
+</p>
+
+Or just reply with a note, like *"this is for the eval project, not general reading"*, and get a redraft.
 
 ## How it works
 
-1. **Capture.** Send a link, a note, or both.
-2. **Draft.** The agent fetches the page and proposes a project with type, intent, priority, a summary and tasks. If the page can't be fetched, the card says so instead of passing off a guess.
-3. **Review.** Approve or reject it, tap a chip to change one field, or reply with a note and get a redraft.
-4. **Commit.** The approved draft becomes a Project page plus linked Task pages in Notion. A link that's already in your backlog is flagged instead of saved twice.
-
-Why it exists: the problem isn't capturing things, it's deciding about them. See [PRODUCT_SENSE.md](PRODUCT_SENSE.md).
-
-## Run it locally
-
-With mise installed, set up the project and start the bot.
-
-```sh
-mise install
-mise run setup
-cp .env.example .env   # fill in the values below
-mise run bot
+```text
+telegram ─▶ webhook λ ─▶ sqs ─▶ worker λ
+                                   │
+    ┌─────────────────┬────────────┴────┬─────────────────┐
+    ▼                 ▼                 ▼                 ▼
+triage agent      source reader     review store       notion
+google adk        browserbase       postgres           project+tasks
 ```
 
-Use `mise tasks` to discover tasks, or `mise -E infra tasks` for Terraform.
-
-You need a Telegram bot token plus your user ID (only that user is served), an [OpenRouter](https://openrouter.ai) key, a [Browserbase](https://www.browserbase.com) key for source reading, a Notion integration token with your Projects and Tasks database IDs, and a `DATABASE_URL`. SQLite is fine locally.
-
-To set up the Notion databases, run `mise exec -- uv run --locked python scripts/migrate_notion_schema.py`. By default it only shows which columns are missing. Add `--apply` to create them. The required and optional columns are listed in [CLAUDE.md](CLAUDE.md#notion-database-schema).
-
-## Deploy
-
-Production runs on AWS Lambda (webhook receiver → SQS → worker), with infrastructure in [`infra/terraform`](infra/terraform). Releases deploy; merges to `main` don't. Merge the standing release-please PR and the tagged version is built, deployed and smoke-tested. To roll back:
-
-```sh
-gh workflow run deploy.yml -f version=v0.6.0
+```text
+draft ──▶ review (paused) ──┬──▶ approve ──▶ commit
+  ▲                         ├──▶ reject
+  └──── note ◀── revise ◀───┘
 ```
 
-Before releasing a source-reader change, add `BROWSERBASE_API_KEY` to the existing runtime secret selected by Terraform’s `runtime_secret_arn` or the Lambda’s `BACKLOG_TAMER_SECRET_ARN`.
+The review step is a Google ADK interrupt, not a chat turn, so free text can never be mistaken for approval.
 
-One-time setup: point the Telegram webhook at the webhook Lambda's Function URL, using `TELEGRAM__WEBHOOK_SECRET` as the secret token. Details are in [CLAUDE.md](CLAUDE.md#releases-and-deploys).
+## Built with
+
+`google-adk` · `openrouter` · `browserbase` · `stagehand` · `notion api` · `python-telegram-bot` · `sqlalchemy` · `aws lambda` · `sqs` · `terraform` · `langsmith`
+
+## Run it
+
+```sh
+git clone https://github.com/iamtokarev/backlog-tamer && cd backlog-tamer
+cp .env.example .env   # telegram, openrouter, browserbase, notion keys
+make run
+```
+
+Configuration, Notion setup and AWS deploy: [docs/setup.md](docs/setup.md)
+
+<p align="center"><sub><code>// saving things was never the problem. deciding was.</code> &nbsp;·&nbsp; <a href="PRODUCT_SENSE.md">why</a></sub></p>
