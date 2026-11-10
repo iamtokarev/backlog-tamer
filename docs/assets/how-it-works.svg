@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="520" viewBox="0 0 840 520" role="img" aria-label="How it works. System: Telegram sends an update to a webhook Lambda, which checks the secret and user and enqueues it on SQS; a worker Lambda consumes it and runs the intake using the triage agent (Google ADK via OpenRouter), the source reader (Browserbase and Stagehand), the review store (Postgres) and Notion. Review loop: the agent drafts, the workflow pauses for your review, then you approve (commit to Notion), reject, or revise with a note, which sends it back to the draft step.">
+<title>How it works. System: Telegram sends an update to a webhook Lambda, which checks the secret and user and enqueues it on SQS; a worker Lambda consumes it and runs the intake using the triage agent (Google ADK via OpenRouter), the source reader (Browserbase and Stagehand), the review store (Postgres) and Notion. Review loop: the agent drafts, the workflow pauses for your review, then you approve (commit to Notion), reject, or revise with a note, which sends it back to the draft step.</title>
+<style>.flow{stroke-dasharray:3 9;animation:f 1.2s linear infinite}.slow{animation-duration:2.4s}@keyframes f{to{stroke-dashoffset:-12}}.pulse{animation:p 1.6s ease-in-out infinite}@keyframes p{0%,100%{fill-opacity:1}50%{fill-opacity:0.25}}@media (prefers-reduced-motion: reduce){.flow,.pulse{animation:none}}</style>
+<defs><marker id="ah" viewBox="0 0 8 8" refX="4" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 8 4 0 8z" fill="#6e7681"/></marker></defs>
+<rect x="0.5" y="0.5" width="839" height="519" rx="14" fill="#0a0e13" stroke="#30363d"/>
+<text x="24" y="32" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="11.5" font-weight="600" letter-spacing="0.5" fill="#9198a1">system</text>
+<rect x="24.5" y="48.5" width="155" height="59" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="38" y="75.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Telegram</text>
+<text x="38" y="93.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">link + note</text>
+<rect x="236.5" y="48.5" width="155" height="59" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="250" y="75.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Webhook λ</text>
+<text x="250" y="93.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">checks secret + user</text>
+<rect x="448.5" y="48.5" width="155" height="59" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="462" y="75.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">SQS</text>
+<text x="462" y="93.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">queue + DLQ</text>
+<rect x="660.5" y="48.5" width="155" height="59" rx="10" fill="#11161d" stroke="#3fb950" stroke-width="1.5"/>
+<text x="674" y="75.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Worker λ</text>
+<text x="674" y="93.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">runs the intake</text>
+<path d="M180 78.0H232" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M180 78.0H232" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<text x="208.0" y="70.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="10.5" fill="#6e7681">update</text>
+<path d="M392 78.0H444" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M392 78.0H444" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<text x="420.0" y="70.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="10.5" fill="#6e7681">enqueue</text>
+<path d="M604 78.0H656" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M604 78.0H656" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<text x="632.0" y="70.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="10.5" fill="#6e7681">consume</text>
+<path d="M738.0 108V140" fill="none" stroke="#30363d" stroke-width="1.5"/>
+<path class="flow" d="M738.0 108V140" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<path d="M102.0 140H738.0" fill="none" stroke="#30363d" stroke-width="1.5"/>
+<path d="M102.0 140V168" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M102.0 140V168" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<path d="M314.0 140V168" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M314.0 140V168" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<path d="M526.0 140V168" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M526.0 140V168" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<path d="M738.0 140V168" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M738.0 140V168" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<rect x="24.5" y="172.5" width="155" height="59" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="38" y="199.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Triage agent</text>
+<text x="38" y="217.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">Google ADK</text>
+<rect x="236.5" y="172.5" width="155" height="59" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="250" y="199.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Source reader</text>
+<text x="250" y="217.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">Browserbase</text>
+<rect x="448.5" y="172.5" width="155" height="59" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="462" y="199.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Review store</text>
+<text x="462" y="217.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">Postgres</text>
+<rect x="660.5" y="172.5" width="155" height="59" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="674" y="199.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Notion</text>
+<text x="674" y="217.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">Project + Tasks</text>
+<rect x="24" y="268" width="792" height="1" fill="#21262d"/>
+<text x="24" y="306" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="11.5" font-weight="600" letter-spacing="0.5" fill="#9198a1">review loop</text>
+<rect x="24.5" y="352.5" width="149" height="55" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="38" y="377.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Draft</text>
+<text x="38" y="395.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">agent proposes</text>
+<rect x="214.5" y="352.5" width="177" height="55" rx="10" fill="#11161d" stroke="#3fb950" stroke-width="1.5"/>
+<circle class="pulse" cx="232" cy="372.5" r="4" fill="#3fb950"/>
+<text x="244" y="377.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Review</text>
+<text x="228" y="395.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">paused until you reply</text>
+<path d="M174 380.0H210" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M174 380.0H210" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<path d="M392 380.0H430" fill="none" stroke="#30363d" stroke-width="1.5"/>
+<path d="M430 347.0V467.0" fill="none" stroke="#30363d" stroke-width="1.5"/>
+<path d="M430 347.0H462" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M430 347.0H462" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<rect x="466.5" y="326.5" width="139" height="41" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="480" y="352.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Approve</text>
+<path d="M430 407.0H462" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M430 407.0H462" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<rect x="466.5" y="386.5" width="139" height="41" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="480" y="412.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Reject</text>
+<path d="M430 467.0H462" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M430 467.0H462" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<rect x="466.5" y="446.5" width="139" height="41" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="480" y="472.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Revise</text>
+<rect x="648.5" y="317.5" width="167" height="59" rx="10" fill="#11161d" stroke="#2a313c" stroke-width="1"/>
+<text x="662" y="344.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f0f3f6">Commit</text>
+<text x="662" y="362.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9198a1">write to Notion</text>
+<path d="M606 347.0H644" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow" d="M606 347.0H644" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<path d="M496 488V492Q496 502 486 502H109Q99 502 99 492V412" fill="none" stroke="#30363d" stroke-width="1.5" marker-end="url(#ah)"/>
+<path class="flow slow" d="M496 488V492Q496 502 486 502H109Q99 502 99 492V412" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.75"/>
+<text x="280" y="495" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="10.5" fill="#6e7681">your note → redraft</text>
+</svg>

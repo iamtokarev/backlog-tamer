@@ -39,26 +39,11 @@ Or just reply with a note, like *"this is for the eval project, not general read
 
 ## How it works
 
-```text
-telegram ─▶ webhook λ ─▶ sqs ─▶ worker λ
-                                   │
-    ┌─────────────────┬────────────┴────┬─────────────────┐
-    ▼                 ▼                 ▼                 ▼
-triage agent      source reader     review store       notion
-google adk        browserbase       postgres           project+tasks
-```
-
-```text
-draft ──▶ review (paused) ──┬──▶ approve ──▶ commit
-  ▲                         ├──▶ reject
-  └──── note ◀── revise ◀───┘
-```
+<p align="center">
+  <img src="docs/assets/how-it-works.svg" width="840" alt="How it works. System: Telegram sends an update to a webhook Lambda, which checks the secret and user and enqueues it on SQS; a worker Lambda consumes it and runs the intake using the triage agent (Google ADK), the source reader (Browserbase), the review store (Postgres) and Notion. Review loop: the agent drafts, the workflow pauses for your review, then you approve (commit to Notion), reject, or revise with a note, which sends it back to the draft step.">
+</p>
 
 The review step is a Google ADK interrupt, not a chat turn, so free text can never be mistaken for approval.
-
-## Built with
-
-`google-adk` · `openrouter` · `browserbase` · `stagehand` · `notion api` · `python-telegram-bot` · `sqlalchemy` · `aws lambda` · `sqs` · `terraform` · `langsmith`
 
 ## Run it
 
@@ -69,5 +54,3 @@ make run
 ```
 
 Configuration, Notion setup and AWS deploy: [docs/setup.md](docs/setup.md)
-
-<p align="center"><sub><code>// saving things was never the problem. deciding was.</code> &nbsp;·&nbsp; <a href="PRODUCT_SENSE.md">why</a></sub></p>
