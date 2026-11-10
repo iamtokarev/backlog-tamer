@@ -33,14 +33,20 @@ Why it exists: the problem isn't capturing things, it's deciding about them. See
 
 ## Run it locally
 
+With mise installed, set up the project and start the bot.
+
 ```sh
+mise install
+mise run setup
 cp .env.example .env   # fill in the values below
-make run               # polling bot; see the Makefile for webhook, test and lint targets
+mise run bot
 ```
+
+Use `mise tasks` to discover tasks, or `mise -E infra tasks` for Terraform.
 
 You need a Telegram bot token plus your user ID (only that user is served), an [OpenRouter](https://openrouter.ai) key, a [Browserbase](https://www.browserbase.com) key for source reading, a Notion integration token with your Projects and Tasks database IDs, and a `DATABASE_URL`. SQLite is fine locally.
 
-To set up the Notion databases, run `uv run python scripts/migrate_notion_schema.py`. By default it only shows which columns are missing. Add `--apply` to create them. The required and optional columns are listed in [CLAUDE.md](CLAUDE.md#notion-database-schema).
+To set up the Notion databases, run `mise exec -- uv run --locked python scripts/migrate_notion_schema.py`. By default it only shows which columns are missing. Add `--apply` to create them. The required and optional columns are listed in [CLAUDE.md](CLAUDE.md#notion-database-schema).
 
 ## Deploy
 
