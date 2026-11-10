@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.1](https://github.com/iamtokarev/backlog-tamer/compare/v0.8.0...v0.8.1) (2026-11-10)
+
+
+### Documentation
+
+* replace README text diagrams with an animated how-it-works SVG ([ac0dbee](https://github.com/iamtokarev/backlog-tamer/commit/ac0dbee1744554b9c9b8874e08ee527b3b2969b8))
+* turn the README into a showcase page ([11c57e8](https://github.com/iamtokarev/backlog-tamer/commit/11c57e8974b819ff20bc9b1a8cf17967ab189670))
+* use mise commands in the README and setup guide ([a4143bc](https://github.com/iamtokarev/backlog-tamer/commit/a4143bcb9ff8580fa68b9e26e57d2ff469ba24a3))
+
 ## [0.8.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.7.2...v0.8.0) (2026-11-05)
 
 
