@@ -5,6 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
+SUMMARY_MAX_CHARS = 600
+MAX_TOPICS = 3
+
 
 class SourceLink(BaseModel):
     url: HttpUrl
@@ -45,7 +48,7 @@ class Grounding(BaseModel):
 
 class ProjectDraft(BaseModel):
     project_name: str = Field(min_length=1)
-    summary: str = Field(min_length=1, max_length=600)
+    summary: str = Field(min_length=1, max_length=SUMMARY_MAX_CHARS)
     project_type: Literal[
         "paper",
         "article",
@@ -72,12 +75,10 @@ class ProjectDraft(BaseModel):
     ]
     priority: Literal["Low", "Medium", "High"]
     source_url: str | None = None
-    topics: list[str] = Field(default_factory=list, max_length=3)
+    topics: list[str] = Field(default_factory=list, max_length=MAX_TOPICS)
 
     def with_edits(self, fields: dict[str, str]) -> "ProjectDraft":
         """This Draft with `fields` applied, validated like a fresh one."""
-        if not fields:
-            return self
         return ProjectDraft.model_validate({**self.model_dump(), **fields})
 
 

@@ -1,9 +1,11 @@
-"""DecisionClient against a stubbed OpenRouter: chunking, titles, usage."""
+"""DecisionClient against a stubbed OpenRouter: chunking, titles, usage, retries."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -89,3 +91,89 @@ def test_usage_is_logged_when_no_hook_is_given(requests, caplog):
         asyncio.run(client.decide({}, {"q": {"type": "noul"}}))
 
     assert "decision_triage_call path=/alpha/decisions model=decider" in caplog.text
+
+
+def _stub(monkeypatch, responses) -> tuple[list[float], list[int]]:
+    """Serve `responses` in order (a Response, or an exception to raise)."""
+    sleeps: list[float] = []
+    sent: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(1)
+        outcome = responses[min(len(sent), len(responses)) - 1]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        client_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: real(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    monkeypatch.setattr(client_module.asyncio, "sleep", fake_sleep)
+    return sleeps, sent
+
+
+def _decide() -> dict:
+    client = DecisionClient(
+        "key", decision_model="d", title_model="t", on_usage=lambda _: None
+    )
+    return asyncio.run(client.decide({}, {"q": {"type": "noul"}}))
+
+
+OK = httpx.Response(200, json={"answers": {"q": {"type": "noul", "noul": 1.0}}})
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [("3", 3.0), ("1.5", 1.5), ("soon", 1.0), ("inf", 1.0), ("-4", 0.0)],
+)
+def test_retry_after_in_seconds_is_honoured_and_junk_falls_back(
+    monkeypatch, header, expected
+):
+    sleeps, _ = _stub(
+        monkeypatch, [httpx.Response(429, headers={"Retry-After": header}), OK]
+    )
+
+    assert _decide()["q"]["noul"] == 1.0
+    assert sleeps == [expected]
+
+
+def test_retry_after_as_an_http_date_waits_until_then(monkeypatch):
+    when = format_datetime(datetime.now(UTC) + timedelta(seconds=30), usegmt=True)
+    sleeps, _ = _stub(
+        monkeypatch, [httpx.Response(503, headers={"Retry-After": when}), OK]
+    )
+
+    _decide()
+
+    assert 20 < sleeps[0] <= 30
+
+
+def test_timeouts_and_transport_errors_are_retried(monkeypatch):
+    sleeps, sent = _stub(
+        monkeypatch, [httpx.ConnectTimeout("slow"), httpx.ConnectError("reset"), OK]
+    )
+
+    assert _decide()["q"]["noul"] == 1.0
+    assert (len(sent), sleeps) == (3, [1, 2])
+
+
+def test_the_last_transport_error_surfaces(monkeypatch):
+    _, sent = _stub(monkeypatch, [httpx.ReadTimeout("still slow")])
+
+    with pytest.raises(httpx.ReadTimeout, match="still slow"):
+        _decide()
+    assert len(sent) == client_module.MAX_ATTEMPTS
+
+
+def test_the_last_retry_status_surfaces(monkeypatch):
+    _, sent = _stub(monkeypatch, [httpx.Response(503)])
+
+    with pytest.raises(httpx.HTTPStatusError, match="503"):
+        _decide()
+    assert len(sent) == client_module.MAX_ATTEMPTS

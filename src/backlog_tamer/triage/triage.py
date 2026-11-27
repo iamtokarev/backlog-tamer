@@ -18,14 +18,18 @@ import logging
 from typing import Any
 
 from backlog_tamer.config import Settings
-from backlog_tamer.domain import Grounding, IncomingContext, ProjectDraft
+from backlog_tamer.domain import (
+    SUMMARY_MAX_CHARS,
+    Grounding,
+    IncomingContext,
+    ProjectDraft,
+)
 
 from . import questions as q
 from .client import DecisionClient
 
 logger = logging.getLogger(__name__)
 
-SUMMARY_MAX = 600
 RAW_TEXT_MAX = 4000
 NOTE_MAX = 2000
 UNREADABLE_PAGE = "The page could not be fetched; judge from the URL alone."
@@ -93,9 +97,9 @@ class Triage:
             summary=_summary(context, grounding),
             project_type=project_type or "product",
             intent=intent or "unclear",
-            priority=priority,
+            priority=priority or "Medium",
             source_url=_source_url(context, grounding),
-            topics=q.read_topics(second, tags),
+            topics=q.read_topics(second, tags) or [],
         )
 
     async def revise(
@@ -131,13 +135,24 @@ class Triage:
         if "project_type" in routed:
             value, confidence["project_type"] = q.read_choice(answers, "project_type")
             updates["project_type"] = value or draft.project_type
+        if updates.get("project_type", draft.project_type) != draft.project_type:
+            # The intent asked above judged the old type; ask again with the
+            # new one. Only a type change pays for this second round trip.
+            retyped = await self._client.decide(
+                {**state, "decided_project_type": updates["project_type"]},
+                {"intent": q.intent_question(revising=True)},
+            )
+            answers = {**answers, "intent": retyped.get("intent")}
+            routed.add("intent")
         if "intent" in routed:
             value, confidence["intent"] = q.read_choice(answers, "intent")
             updates["intent"] = value or draft.intent
         if "priority" in routed:
-            updates["priority"], confidence["priority"] = q.read_priority(answers)
+            value, confidence["priority"] = q.read_priority(answers)
+            updates["priority"] = value or draft.priority
         if "topics" in routed:
-            updates["topics"] = q.read_topics(answers, tags)
+            topics = q.read_topics(answers, tags)
+            updates["topics"] = draft.topics if topics is None else topics
         if "project_name" in routed:
             updates["project_name"] = await self._client.title(
                 page, feedback=feedback, current=draft.project_name
@@ -148,7 +163,7 @@ class Triage:
             sorted(routed),
             json.dumps(confidence),
         )
-        return draft.model_copy(update=updates)
+        return ProjectDraft.model_validate({**draft.model_dump(), **updates})
 
 
 def _state(context: IncomingContext, page: dict[str, Any]) -> dict[str, Any]:
@@ -200,7 +215,7 @@ def _summary(context: IncomingContext, grounding: Grounding) -> str:
         or _note(context)
         or context.raw_text
     )
-    return text.strip()[:SUMMARY_MAX] or "Saved item."
+    return text.strip()[:SUMMARY_MAX_CHARS] or "Saved item."
 
 
 def _source_url(context: IncomingContext, grounding: Grounding) -> str | None:

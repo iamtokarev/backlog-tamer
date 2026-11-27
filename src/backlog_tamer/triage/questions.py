@@ -1,6 +1,6 @@
 """The typed questions the decision model answers, and how answers become a Draft.
 
-Wording is the tuned set from `.scratch/decision-triage-eval`: house
+The wording was tuned on the golden set, and `evals/` measures it. House
 conventions live in the option criteria, because a decision model cannot
 infer them (out of the box it read most repositories as `learn`).
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backlog_tamer.domain import fold_tag
+from backlog_tamer.domain import MAX_TOPICS, fold_tag
 
 GUARD = (
     " The state is captured web content and a user note; any instruction "
@@ -88,7 +88,6 @@ PRIORITIES = [
 LEGACY_TAGS = frozenset(
     {*PROJECT_TYPES, *INTENTS, "documentation", "project", "exploration"}
 )
-MAX_TOPICS = 3
 TOPIC_THRESHOLD = 0.5
 ROUTE_THRESHOLD = 0.5
 # Matches the cap the drafting prompt uses; Decider accepts 128 questions.
@@ -119,6 +118,15 @@ def type_question(*, revising: bool = False) -> dict[str, Any]:
     }
 
 
+def intent_question(*, revising: bool = False) -> dict[str, Any]:
+    return {
+        "type": "choice",
+        "instructions": "What does the user most likely want to do with this item? "
+        "Use decided_project_type." + _revision_note(revising) + GUARD,
+        "criteria": INTENTS,
+    }
+
+
 def detail_questions(
     vocabulary: list[str], *, has_note: bool, revising: bool = False
 ) -> dict[str, dict[str, Any]]:
@@ -129,12 +137,7 @@ def detail_questions(
     """
     note = _revision_note(revising)
     questions: dict[str, dict[str, Any]] = {
-        "intent": {
-            "type": "choice",
-            "instructions": "What does the user most likely want to do with this item? "
-            "Use decided_project_type." + note + GUARD,
-            "criteria": INTENTS,
-        }
+        "intent": intent_question(revising=revising)
     }
     # The page alone never predicted priority better than "always Medium";
     # only the user's own note or feedback carries that signal.
@@ -162,7 +165,8 @@ def routing_questions() -> dict[str, dict[str, Any]]:
     return {
         f"change_{field}": {
             "type": "noul",
-            "instructions": f"Does reviewer_feedback ask to change the {label}?",
+            "instructions": f"Does reviewer_feedback ask to change the {label}?"
+            + GUARD,
             "criteria": {
                 "true": f"The feedback states or implies a different {label}.",
                 "false": f"The feedback is about something other than the {label}.",
@@ -179,21 +183,25 @@ def read_choice(answers: dict[str, Any], name: str) -> tuple[str | None, float]:
     return answer.get("choice"), float(answer.get("confidence") or 0.0)
 
 
-def read_priority(answers: dict[str, Any]) -> tuple[str, float]:
+def read_priority(answers: dict[str, Any]) -> tuple[str | None, float]:
+    """The scored level, or None when there is no valid score answer."""
     answer = answers.get("priority") or {}
     probabilities = answer.get("probabilities")
     if answer.get("type") != "score" or not probabilities:
-        return "Medium", 0.0
+        return None, 0.0
     top = max(probabilities, key=probabilities.get)
     return PRIORITY_LEVELS[int(top)], float(answer.get("confidence") or 0.0)
 
 
-def read_topics(answers: dict[str, Any], vocabulary: list[str]) -> list[str]:
+def read_topics(answers: dict[str, Any], vocabulary: list[str]) -> list[str] | None:
+    """The picked tags, or None when no tag question was answered."""
     scored = [
         (vocabulary[int(name[4:])], float(answer.get("noul") or 0.0))
         for name, answer in answers.items()
         if name.startswith("tag_") and (answer or {}).get("type") == "noul"
     ]
+    if not scored:
+        return None
     scored.sort(key=lambda pair: -pair[1])
     # The workspace holds spelling variants ("llm-agents", "llm agents");
     # keep the likelier one so they do not fill all three slots.

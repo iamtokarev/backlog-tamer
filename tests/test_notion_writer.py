@@ -400,11 +400,27 @@ def test_tags_carry_topics_when_the_draft_has_them():
 
     assert payload["properties"]["Tags"] == {
         "multi_select": [
-            {"name": "langgraph"},
-            {"name": "multi-agent"},
+            {"name": "LangGraph"},
+            {"name": "Multi-Agent"},
             {"name": "orchestration"},
         ]
     }
+
+
+def test_a_capitalised_existing_tag_is_written_unchanged():
+    writer = NotionWriter(token="secret", projects_database_id="projects-db")
+    draft = ProjectDraft(
+        project_name="Model Context Protocol servers",
+        summary="Reference servers for MCP.",
+        project_type="repository",
+        intent="explore",
+        priority="Medium",
+        topics=["MCP"],
+    )
+
+    tags = writer.build_project_payload(draft)["properties"]["Tags"]
+
+    assert tags == {"multi_select": [{"name": "MCP"}]}
 
 
 def test_topic_tags_drop_duplicates_and_commas():
@@ -575,7 +591,7 @@ def test_topic_tags_fold_spelling_variants_and_keep_at_most_three():
     tags = writer.build_project_payload(draft)["properties"]["Tags"]
 
     assert tags == {
-        "multi_select": [{"name": "agent-evaluation"}, {"name": "llm agents"}]
+        "multi_select": [{"name": "Agent-Evaluation"}, {"name": "LLM agents"}]
     }
 
 
@@ -603,7 +619,7 @@ def test_commit_makes_one_page_and_ignores_the_existing_tag_vocabulary():
     )
     assert len(client.posts) == 1
     tags = client.posts[0][1]["properties"]["Tags"]["multi_select"]
-    assert tags == [{"name": "agent-evaluation"}]
+    assert tags == [{"name": "Agent-Evaluation"}]
 
 
 def test_list_projects_follows_every_page_of_the_query():

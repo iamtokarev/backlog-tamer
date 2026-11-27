@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any, get_args
 
+import pytest
+from pydantic import ValidationError
+
 from backlog_tamer.domain import Grounding, IncomingContext, ProjectDraft, SourceLink
 from backlog_tamer.integrations.telegram.rendering import FIELD_OPTIONS
 from backlog_tamer.triage import Triage, questions
@@ -201,11 +204,87 @@ def test_missing_answers_keep_the_current_values_on_revise():
 
     revised = revise(client, draft, "redo it")
 
-    assert (revised.project_type, revised.intent) == (
-        draft.project_type,
-        draft.intent,
+    assert revised == draft
+
+
+def test_a_revision_without_tag_answers_keeps_the_topics():
+    client = FakeClient()
+    draft = classify(client, context(note="need this for my bot today"))
+    assert (draft.priority, draft.topics) == ("High", ["langgraph", "multi-agent"])
+    client.answers = {
+        **NO_ROUTES,
+        "change_priority": noul(0.9),
+        "change_topics": noul(0.9),
+    }
+
+    revised = revise(client, draft, "lower priority, fix the tags")
+
+    assert (revised.priority, revised.topics) == ("High", ["langgraph", "multi-agent"])
+
+
+def test_a_type_change_re_asks_intent_with_the_new_type():
+    client = FakeClient()
+    draft = classify(client)
+    client.answers.update(
+        {
+            **NO_ROUTES,
+            "change_project_type": noul(0.9),
+            "project_type": choice("course"),
+            "intent": choice("learn"),
+        }
     )
-    assert revised.priority == "Medium"
+
+    revised = revise(client, draft, "this is a course")
+
+    assert (revised.project_type, revised.intent) == ("course", "learn")
+    state, asked = client.calls[-1]
+    assert asked == ["intent"]
+    assert state["decided_project_type"] == "course"
+    assert state["reviewer_feedback"] == "this is a course"
+
+
+def test_an_unchanged_type_keeps_the_revision_to_one_round_trip():
+    client = FakeClient()
+    draft = classify(client)
+    calls_before = len(client.calls)
+    client.answers.update(
+        {**NO_ROUTES, "change_project_type": noul(0.9), "intent": choice("build")}
+    )
+
+    revised = revise(client, draft, "it is a repository, really")
+
+    assert revised == draft
+    assert len(client.calls) == calls_before + 1
+
+
+def test_a_revision_that_does_not_route_the_title_makes_no_title_call():
+    client = FakeClient()
+    draft = classify(client)
+    client.answers.update({**NO_ROUTES, "change_priority": noul(0.9)})
+
+    revise(client, draft, "make it high priority")
+
+    assert len(client.title_calls) == 1  # the classify title only
+
+
+def test_an_empty_title_from_the_title_call_is_rejected():
+    client = FakeClient()
+    draft = classify(client)
+    client.answers.update({**NO_ROUTES, "change_project_name": noul(0.95)})
+
+    with pytest.raises(ValidationError):
+        revise(client, draft, 'Rename it to ""')
+
+
+def test_every_question_ends_with_the_injection_guard():
+    built = {
+        "project_type": questions.type_question(),
+        "revised_type": questions.type_question(revising=True),
+        **questions.detail_questions(["mcp"], has_note=True, revising=True),
+        **questions.routing_questions(),
+    }
+
+    assert all(q["instructions"].endswith(questions.GUARD) for q in built.values())
 
 
 def test_a_skipped_grounding_is_judged_from_the_raw_text():
