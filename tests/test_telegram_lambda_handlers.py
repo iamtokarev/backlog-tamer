@@ -13,6 +13,7 @@ from backlog_tamer.integrations.telegram.lambda_handlers import (
     webhook_handler,
     worker_handler,
 )
+from backlog_tamer.triage import DecisionClient
 
 # The healthcheck validates the full Settings model, which in Lambda is
 # populated from Secrets Manager. Tests must supply the required fields
@@ -51,6 +52,17 @@ def healthcheck_env(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(NotionWriter, "describe_schema", healthy_schema)
+
+    # The model probes are real OpenRouter calls in the deployed healthcheck;
+    # here both models answer.
+    async def decide(self, state, questions):
+        return {name: {"type": "noul", "noul": 0.9} for name in questions}
+
+    async def title(self, page, *, feedback=None, current=None):
+        return "Healthcheck"
+
+    monkeypatch.setattr(DecisionClient, "decide", decide)
+    monkeypatch.setattr(DecisionClient, "title", title)
 
     # get_settings is lru_cached, so clear it on both sides to keep these
     # values from leaking into or out of other tests.
@@ -216,3 +228,41 @@ def test_worker_handler_healthcheck_reports_a_degraded_capability(
 
     assert result["skipped_notion_properties"] == ["Source"]
     assert result["degraded_capabilities"] == ["duplicate-detection"]
+
+
+def test_worker_handler_healthcheck_reports_both_models(healthcheck_env, monkeypatch):
+    monkeypatch.setenv("TRIAGE__DECISION_MODEL", "acme/decider")
+    monkeypatch.setenv("TRIAGE__TITLE_MODEL", "acme/titler:free")
+    get_settings.cache_clear()
+
+    result = worker_handler({"healthcheck": True}, SimpleNamespace())
+
+    assert result["models"] == {"decision": "acme/decider", "title": "acme/titler:free"}
+
+
+def test_worker_handler_healthcheck_raises_when_a_model_call_fails(
+    healthcheck_env,
+    monkeypatch,
+):
+    """A retired slug, a typo or a bad key must fail the deploy, not a capture."""
+
+    async def retired_title(self, page, *, feedback=None, current=None):
+        raise RuntimeError("404 No endpoints found for acme/titler:free")
+
+    monkeypatch.setattr(DecisionClient, "title", retired_title)
+
+    with pytest.raises(RuntimeError, match="No endpoints found"):
+        worker_handler({"healthcheck": True}, SimpleNamespace())
+
+
+def test_worker_handler_healthcheck_raises_when_decide_omits_the_answer(
+    healthcheck_env,
+    monkeypatch,
+):
+    async def no_answers(self, state, questions):
+        return {}
+
+    monkeypatch.setattr(DecisionClient, "decide", no_answers)
+
+    with pytest.raises(RuntimeError, match="ok"):
+        worker_handler({"healthcheck": True}, SimpleNamespace())
