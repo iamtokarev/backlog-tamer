@@ -2,20 +2,20 @@
 type: Data Model
 title: Data Model
 description: >-
-  Pydantic schemas, SQLAlchemy tables, and Notion payload structures used by
-  Backlog Tamer, including ProjectDraft, IncomingContext, ConfirmationRecord,
-  and the confirmations/telegram state tables.
+  Pydantic domain types, SQLAlchemy tables, and Notion payload structures used
+  by Backlog Tamer, including ProjectDraft, IncomingContext, Grounding,
+  ConfirmationRecord, and the confirmations/telegram state tables.
 tags: [data-model, schema, database]
-timestamp: 2025-01-20T00:00:00Z
+timestamp: 2026-11-06T00:00:00Z
 ---
 
 # Data Model
 
-Backlog Tamer uses Pydantic models for agent I/O and internal data transfer, SQLAlchemy tables for durable state, and Notion API payloads for external writes.
+Backlog Tamer uses Pydantic models for domain data and internal transfer, SQLAlchemy tables for durable state, and Notion API payloads for external writes.
 
-## Agent Schemas
+## Domain Types
 
-All defined in `src/backlog_tamer/agents/intake_triage/schemas.py`.
+Defined in `src/backlog_tamer/domain.py`. These are the shared types used by [Triage](../workflows/intake-flow.md), the application layer, and the integrations.
 
 ### IncomingContext
 
@@ -27,47 +27,15 @@ The parsed user input from a Telegram message. Built by `parsing.py` from Telegr
 | `note` | `str \| None` | Text with URLs stripped out |
 | `links` | `list[SourceLink]` | Deduplicated URLs from message entities and text links |
 
-### ProjectDraft
-
-The agent's structured output. Written to session state under key `draft_proposal` and persisted as JSON in the `confirmations` table.
+### SourceLink
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `project_name` | `str` | Min length 1 (never bare names) |
-| `short_name` | `str` | The bare handle the project is known by, 2–4 words with no payoff clause (e.g. `"SKILL.state"`, `"NVIDIA PAIR"`). Defaults to `""`; falls back to `effective_short_name` |
-| `summary` | `str` | 1–600 chars |
-| `project_type` | `Literal` | `paper`, `article`, `video`, `course`, `repository`, `product`, `company`, `model`, `tool` — describes the thing the user wants to explore, not the page that introduced it |
-| `intent` | `Literal` | `learn`, `build`, `research`, `explore`, `reference`, `unclear` |
-| `priority` | `Literal` | `Low`, `Medium`, `High` — chosen deliberately, not defaulted to Medium when unclear |
-| `source_url` | `str \| None` | Original URL if available |
-| `topics` | `list[str]` | Up to 3 topic tags; carried into the Notion Tags property instead of restating project type/intent |
-| `tasks` | `list[str]` | Defaults to empty list; up to 5 if user requests breakdown |
+| `url` | `HttpUrl` | A URL from the message |
 
-A `@model_validator(mode="before")` named `migrate_legacy_resource_type` transparently migrates drafts persisted with the old `resource_type` field to the new `project_type` using `LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE`. This ensures pending confirmations saved before the rename remain reviewable.
+### Grounding
 
-The `effective_short_name` property returns `short_name` when set, otherwise the part of `project_name` before the first colon (the handle the agent already places there), falling back to the whole name. It is the subject used to [compose the default task name](../workflows/intake-flow.md#task-name-composition).
-
-### FetchedUrl
-
-Result of the `SourceReader.read` call, surfaced to the agent through the `fetch_url` tool adapter and stored in session state under `fetched_context`. Defined in `src/backlog_tamer/integrations/source_reader.py`. See [Source Reader](../integrations/source-reader.md).
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `status` | `Literal["success", "error"]` | |
-| `requested_url` | `str` | Original URL passed to tool |
-| `final_url` | `str \| None` | After redirects |
-| `canonical_url` | `str \| None` | From `<link rel="canonical">` |
-| `domain` | `str \| None` | |
-| `page_kind` | `Literal` | `html`, `pdf`, `text`, `unknown` |
-| `title`, `description`, `site_name`, `author`, `published_at` | `str \| None` | Extracted metadata |
-| `key_points` | `list[str]` | Up to 5 extracted points |
-| `content_preview` | `str \| None` | Max 1600 chars |
-| `notes` | `list[str]` | Additional extracted notes |
-| `error` | `str \| None` | Error reason if status is error |
-
-### DraftGrounding
-
-A compact summary of what the fetch tool learned, persisted alongside the draft so the review card and Notion page can show confidence and key points. Defined in `schemas.py`.
+What was actually read from the source behind a draft, kept beside it so the review card can show confidence, the Notion page can carry key points, and a revision can judge the page without a refetch. Replaces the earlier `DraftGrounding`.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -76,9 +44,53 @@ A compact summary of what the fetch tool learned, persisted alongside the draft 
 | `site_name` | `str \| None` | From fetched page metadata |
 | `page_title` | `str \| None` | From fetched page |
 | `canonical_url` | `str \| None` | Used for duplicate detection |
-| `key_points` | `list[str]` | Up to 4 points, surfaced in Notion page body |
+| `final_url` | `str \| None` | After redirects |
+| `description` | `str \| None` | From fetched page metadata |
+| `author` | `str \| None` | |
+| `published_at` | `str \| None` | |
+| `domain` | `str \| None` | |
+| `page_kind` | `str \| None` | `html`, `pdf`, `text`, `unknown` |
+| `key_points` | `list[str]` | Up to 4, surfaced in the Notion page body |
+| `content_preview` | `str \| None` | |
 
 The `is_degraded` property returns `True` when `fetch_status == "error"`, which triggers a fetch-warning footer on the review card and a "Retry fetch" button.
+
+### ProjectDraft
+
+The structured draft produced by `Triage.classify` / `Triage.revise`. No `short_name`, no `tasks`, no `migrate_legacy_resource_type` validator — the task name composition and legacy `resource_type` migration from the agent era are gone.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `project_name` | `str` | Min length 1; written by the title LLM call |
+| `summary` | `str` | 1–600 chars; the page description or title, not model-written |
+| `project_type` | `Literal` | `paper`, `article`, `video`, `course`, `repository`, `product`, `company`, `model`, `tool` |
+| `intent` | `Literal` | `learn`, `build`, `research`, `explore`, `reference`, `unclear` |
+| `priority` | `Literal` | `Low`, `Medium`, `High` — defaults to `Medium` unless a note or revision speaks to it |
+| `source_url` | `str \| None` | Prefers `grounding.canonical_url` |
+| `topics` | `list[str]` | Up to 3 subject tags |
+
+`with_edits(fields)` returns a new `ProjectDraft` with `fields` applied and re-validated, used by `IntakeService` to re-apply quick edits after a revision or refetch.
+
+### fold_tag
+
+`fold_tag(tag)` collapses spelling differences that should not count as a second tag: lowercases, splits on non-alphanumerics, and strips trailing plurals from words longer than 3 chars. Used by `read_topics` (so `llm-agents` matches `llm agent` when deduplicating picked tags) and by the eval's tag comparison.
+
+## FetchedUrl
+
+Result of `SourceReader.read`, defined in `src/backlog_tamer/integrations/source_reader.py`. `FetchedUrl.to_grounding()` converts it into the shared `Grounding` type. See [Source Reader](../integrations/source-reader.md).
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `status` | `Literal["success", "error"]` | |
+| `requested_url` | `str` | Normalized URL passed in |
+| `final_url` | `str \| None` | After redirects |
+| `canonical_url` | `str \| None` | From `<link rel="canonical">`, or the pinned YouTube watch URL |
+| `domain`, `page_kind`, `content_type`, `status_code` | various | `page_kind`: `html`, `pdf`, `text`, `unknown` |
+| `title`, `description`, `site_name`, `author`, `published_at` | `str \| None` | Extracted metadata |
+| `key_points` | `list[str]` | Up to 5 |
+| `content_preview` | `str \| None` | Max 1600 chars |
+| `notes` | `list[str]` | e.g. `"Only the first 5 PDF pages were parsed."` |
+| `error` | `str \| None` | Structured failure reason |
 
 ## Application Models
 
@@ -97,24 +109,24 @@ class ConfirmationStatus(StrEnum):
     DUPLICATE = "duplicate"
 ```
 
-`FAILED` is retryable — `mark_committing_once` accepts `FAILED` as a valid source state, so the user can retry the Notion write without re-running the agent. `UNDONE` means the Notion pages were archived after a successful commit (via the undo button). `DUPLICATE` means a project with the same source URL already exists in Notion.
+`FAILED` is retryable — `mark_committing_once` accepts `FAILED` as a valid source state. `UNDONE` means the Notion page was archived after a commit (via the undo button). `DUPLICATE` means a project with the same source URL already exists.
 
 ### ManualEdit
 
-One field the user corrected with the inline-keyboard quick-edit buttons, paired with what the agent originally proposed. Defined in `src/backlog_tamer/application/models.py`.
+One field the user corrected with the inline-keyboard quick-edit buttons, paired with what Triage originally proposed.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `before` | `str` | The agent's original answer; kept stable across repeated taps on the same field (only set the first time) |
+| `before` | `str` | Triage's original answer; kept stable across repeated taps (only set the first time) |
 | `after` | `str` | The user's corrected value |
 
-`ManualEdit.coerce` loads rows written before `before` existed, where the stored value was the new value alone (a bare `str` becomes `ManualEdit(after=value)`). A `field_validator` on `ConfirmationRecord.manual_edits` runs `coerce` on every entry so legacy JSON loads without error.
+`ManualEdit.coerce` loads rows written before `before` existed (a bare `str` becomes `ManualEdit(after=value)`). A `field_validator` on `ConfirmationRecord.manual_edits` runs `coerce` on every entry.
 
-The `corrected_fields` property returns only edits where `before` is non-empty and differs from `after` — the per-field accuracy signal that `IntakeService._log_corrections` emits as one structured `intake_correction` line at approval time, since quick edits run no model and otherwise leave no trace.
+`corrected_fields` returns only edits where `before` is non-empty and differs from `after` — the per-field accuracy signal that `IntakeService._log_corrections` emits as one structured `intake_correction` line at approval.
 
 ### ConfirmationRecord
 
-The full state of an intake item, persisted in the `confirmations` table.
+The full state of an intake item, persisted in the `confirmations` table. No `checkpoint`, no `notion_task_ids`, no `review_message` — those ADK-era fields are gone from the model (legacy columns remain in the table for rollback to v0.8.0).
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -122,21 +134,18 @@ The full state of an intake item, persisted in the `confirmations` table.
 | `user_id` | `str` | Telegram user ID |
 | `chat_id` | `str \| None` | Telegram chat ID |
 | `source_message_id` | `str \| None` | Telegram message ID |
-| `checkpoint` | `Checkpoint` | Opaque resume coordinates (session_id, invocation_id, request_input_call_id) handed back to `TriageWorkflow`; the store maps this onto its own `session_id`/`invocation_id`/`request_input_call_id` columns |
 | `status` | `ConfirmationStatus` | Current lifecycle state |
 | `incoming_context` | `IncomingContext` | Original user input |
 | `draft_proposal` | `ProjectDraft` | Latest draft |
-| `review_message` | `str` | Human-readable review prompt |
-| `grounding` | `DraftGrounding` | What the fetch tool learned (fetch status, key points, etc.) |
-| `manual_edits` | `dict[str, ManualEdit]` | Fields the user changed via inline keyboard pickers, as before/after pairs; replayed into revision so the agent does not undo them. Loads legacy `dict[str, str]` rows via `ManualEdit.coerce` |
+| `grounding` | `Grounding` | What the source reader learned |
+| `manual_edits` | `dict[str, ManualEdit]` | Quick edits as before/after pairs; replayed after every revision/refetch |
 | `created_at`, `updated_at` | `datetime` | Timestamps |
 | `resolved_at` | `datetime \| None` | Set when terminal |
 | `notion_project_id` | `str \| None` | Notion page ID after commit |
 | `notion_project_url` | `str \| None` | Notion page URL after commit |
-| `notion_task_ids` | `list[str]` | Notion task page IDs after commit |
 | `failure_reason` | `str \| None` | Error details if FAILED |
 
-The `kept_fields` property returns `{field: edit.after}` for all manual edits — the quick edits the next revision must preserve. `TriageWorkflow.revise` receives these so the revision feedback (`build_revision_feedback`) prepends them to the user's free-text feedback.
+`kept_fields` returns `{field: edit.after}` for all manual edits — the quick edits the next revision must preserve.
 
 ### IntakeResult
 
@@ -147,17 +156,16 @@ The return type from `IntakeService` methods, consumed by Telegram handlers.
 | `status` | `str` | Lifecycle status string |
 | `confirmation_id` | `str \| None` | |
 | `draft_proposal` | `ProjectDraft \| None` | |
-| `grounding` | `DraftGrounding` | Fetch tool results summary |
-| `review_message` | `str \| None` | |
+| `grounding` | `Grounding` | Fetch results summary |
 | `notion_project_url` | `str \| None` | |
-| `duplicate_created_time` | `str \| None` | When the existing duplicate was created (for DUPLICATE status) |
+| `duplicate_created_time` | `str \| None` | When the existing duplicate was created |
 | `failure_reason` | `str \| None` | Error details if FAILED |
 
 ## Database Tables
 
 ### `confirmations` (ConfirmationStore)
 
-Defined in `src/backlog_tamer/application/confirmation_store.py`. Uses SQLAlchemy ORM. JSON fields store `IncomingContext` and `ProjectDraft` as serialized strings.
+Defined in `src/backlog_tamer/application/confirmation_store.py`. Uses SQLAlchemy ORM. JSON fields store `IncomingContext`, `ProjectDraft`, `Grounding`, and `manual_edits` as serialized strings. Legacy columns (`session_id`, `invocation_id`, `request_input_call_id`, `review_message`, `notion_task_ids_json`) are kept with empty defaults for rollback to v0.8.0 but are neither written meaningfully nor read.
 
 ### `telegram_revision_states` (TelegramStateStore)
 
@@ -169,6 +177,7 @@ Defined in `src/backlog_tamer/integrations/telegram/state.py`. Tracks which conf
 | `user_id` | `String(255)` | |
 | `chat_id` | `String(255)` | |
 | `confirmation_id` | `String(64)` | Which draft is being revised |
+| `card_message_id` | `BigInteger \| None` | The review card whose keyboard became "Cancel revision" |
 | `created_at`, `updated_at` | `DateTime` | |
 
 ### `telegram_processed_updates` (TelegramStateStore)
@@ -189,16 +198,11 @@ erDiagram
         string user_id
         string chat_id
         string source_message_id
-        string session_id
-        string invocation_id
-        string request_input_call_id
         string status
         text incoming_context_json
         text draft_proposal_json
-        text review_message
         text grounding_json
         text manual_edits_json
-        text notion_task_ids_json
         datetime created_at
         datetime updated_at
         datetime resolved_at
@@ -212,6 +216,7 @@ erDiagram
         string user_id
         string chat_id
         string confirmation_id
+        bigint card_message_id
         datetime created_at
         datetime updated_at
     }
@@ -226,45 +231,32 @@ erDiagram
 
 ## Notion Payload Structure
 
-`NotionWriter` (`src/backlog_tamer/integrations/notion/writer.py`) builds two types of Notion page payloads. It also performs duplicate detection, schema fitting, and undo (archival).
+`NotionWriter` (`src/backlog_tamer/integrations/notion/writer.py`) builds a single project page payload. There are no task pages — drafts carry no tasks.
 
 ### Project Page
 
-Created in the projects database with:
+Created in the projects database via `create_project`:
+
 - **Project name** (title): `draft.project_name`
 - **Status** (status): `"Backlog"` (fixed default)
 - **Priority** (select): `draft.priority`
 - **Project type** (select): `draft.project_type` (property name `"Project type"`; falls back to legacy `"Type"` if that is the only column the database has)
 - **Intent** (select): `draft.intent`
-- **Tags** (multi_select): derived from `draft.topics`; each topic is folded onto the spelling of an existing tag (via `_tag_key`, which ignores hyphens, case, and trailing plurals) so the vocabulary does not split into near-duplicates. Drafts without topics fall back to `draft.project_type` and `draft.intent` (via `_draft_tags`)
+- **Tags** (multi_select): `draft.topics`, folded onto existing tag spellings via `fold_tag`/`_tag_key`
 - **Captured** (date): today's date
 - **Summary** (rich_text): `draft.summary`
-- **Source** (url): `commit_source_url(draft, grounding)` — prefers `grounding.canonical_url` over `draft.source_url` so a re-capture through a different tracking link can match the earlier row that `find_project_by_source` looks up by canonical URL
+- **Source** (url): `commit_source_url(draft, grounding)` — prefers `grounding.canonical_url` for duplicate detection
 - **Icon**: emoji mapped from `project_type`
-- **Children** (page body): bookmark block for the source URL, "Why I saved this" heading with the user's note, "Key points" from grounding (if available), "Next action" to-do blocks for tasks, and a provenance callout. No `template` is sent on project pages because Notion rejects a page that sends both a template and children.
-- Optional properties (Source, Project type or legacy Type, Intent, Captured) are silently dropped if the database does not have them yet, via `_fit_to_schema`.
-
-### Task Page
-
-Created in the tasks database for each entry in `draft.tasks`:
-- **Task name** (title): task name string
-- **Status** (status): `"Not started"` (fixed default)
-- **Priority** (select): inherited from project draft priority
-- **Projects** (relation): `[{id: project_id}]` linking back to the created project page
-- **Due** (date): computed from priority — High = +3 days, Medium = +14 days, Low = none
-- **Source** (url): `commit_source_url(draft, grounding)` (canonical URL preferred)
-- Uses `template: {type: "default"}`
-- Optional properties (Due, Source) are silently dropped if missing from the database.
+- **Children** (page body): bookmark block for the source URL, "Why I saved this" heading with the user's note, "Key points" from grounding, and a provenance callout. No `template` is sent (Notion rejects a page with both a template and children).
+- Optional properties (Source, Project type or legacy Type, Intent, Captured) are silently dropped if the database does not have them, via `_fit_to_schema`.
 
 ## Source References
 
 | File | Purpose |
 |------|---------|
-| `src/backlog_tamer/agents/intake_triage/schemas.py` | `IncomingContext`, `ProjectDraft` (with `short_name`, `effective_short_name`, `migrate_legacy_resource_type`), `DraftGrounding`, `SourceLink`, `ReviewDecision` |
-| `src/backlog_tamer/integrations/source_reader.py` | `FetchedUrl` Grounding model |
-| `src/backlog_tamer/agents/intake_triage/triage_workflow.py` | `Checkpoint` (opaque resume coordinates stored on `ConfirmationRecord`), `TurnOutcome` |
-| `src/backlog_tamer/agents/intake_triage/task_names.py` | Default task name composition (`compose_task_names`, `with_composed_task_names`) |
+| `src/backlog_tamer/domain.py` | `IncomingContext`, `SourceLink`, `Grounding`, `ProjectDraft` (`with_edits`), `fold_tag` |
+| `src/backlog_tamer/integrations/source_reader.py` | `FetchedUrl` (`to_grounding`), `_PageGrounding` extraction schema |
 | `src/backlog_tamer/application/models.py` | `ConfirmationRecord`, `ConfirmationStatus`, `ManualEdit`, `IntakeResult` |
 | `src/backlog_tamer/application/confirmation_store.py` | `ConfirmationRow` ORM, `confirmations` table |
 | `src/backlog_tamer/integrations/telegram/state.py` | `TelegramRevisionRow`, `TelegramUpdateRow` ORM |
-| `src/backlog_tamer/integrations/notion/writer.py` | Notion page payload builders |
+| `src/backlog_tamer/integrations/notion/writer.py` | Notion project page payload builder, `commit_source_url` |

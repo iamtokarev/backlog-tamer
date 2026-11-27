@@ -1,6 +1,6 @@
 # Backlog Tamer
 
-Turns links and notes sent over Telegram into Projects and Tasks in a Notion backlog, with a human approving every agent draft before anything is written.
+Turns links and notes sent over Telegram into Projects in a Notion backlog, with a human approving every Draft before anything is written.
 
 ## Language
 
@@ -11,11 +11,11 @@ One captured item's journey from the message the user sent to a committed, rejec
 _Avoid_: Capture job, request
 
 **Draft**:
-The agent's proposed Project and its Tasks for one Intake, shown to the user for Review.
+The proposed Project for one **Intake**, shown to the user for **Review**. It carries no Tasks.
 _Avoid_: Proposal, suggestion
 
 **Grounding**:
-What the agent actually read from the source page behind a Draft, or why it could not read it.
+What was actually read from the source page behind a **Draft**, or why it could not be read.
 _Avoid_: Fetch result, context
 
 ### Review
@@ -29,23 +29,23 @@ The record of one Intake's Review and where it stands, from pending review throu
 _Avoid_: Ticket, job
 
 **Quick edit**:
-A field the user changes on the Draft directly with a button, without asking the agent to redraft. Later revisions must keep it.
+A field the user changes on the **Draft** directly with a button. It holds for the rest of the **Review**, through every **Revision**.
 _Avoid_: Manual override, patch
 
 **Revision**:
-Free-text feedback that sends the Draft back to the agent to redraft.
+Free-text feedback that sends the **Draft** back to have the fields it is about decided again.
 _Avoid_: Edit, correction
 
-### Triage turns
+### Triage
 
 **Triage turn**:
-One run of the agent between two human decisions: from the message or feedback it receives to the next Turn outcome.
-_Avoid_: Step, invocation
+One decision pass between two human decisions: the Draft is decided from an Intake, or decided again from a **Revision**.
+_Avoid_: Step, invocation, agent run
 
-**Turn outcome**:
-How a Triage turn ends: a Draft that needs Review, an approval, or a rejection. There are no other endings.
-_Avoid_: Result, route
+**Label set**:
+The fixed options a Draft is decided over: project types, intents and priorities, plus the tags already in the backlog.
+_Avoid_: Taxonomy, categories
 
-**Checkpoint**:
-The point where a paused Triage waits on the human. The next Triage turn resumes from it.
-_Avoid_: Interrupt, resume token, session
+**Routing**:
+Deciding which Draft fields a **Revision** is about, so only those fields are decided again.
+_Avoid_: Intent detection, dispatch

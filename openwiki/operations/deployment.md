@@ -2,11 +2,11 @@
 type: Operations
 title: Deployment and Operations
 description: >-
-  Local development setup, Docker container build, AWS Lambda deployment with
-  Terraform (SQS, ECR, Secrets Manager), CI/CD via GitHub Actions, and runtime
-  secret management.
+  Local development setup with mise, Docker container build, AWS Lambda
+  deployment with Terraform (SQS, ECR, Secrets Manager), CI/CD via GitHub
+  Actions, and runtime secret management.
 tags: [operations, deployment, ci-cd, terraform, aws]
-timestamp: 2025-01-20T00:00:00Z
+timestamp: 2026-11-06T00:00:00Z
 ---
 
 # Deployment and Operations
@@ -15,45 +15,50 @@ timestamp: 2025-01-20T00:00:00Z
 
 ### Prerequisites
 
-- Python 3.12+
-- `uv` for dependency management
+- [mise](https://mise.jdx.dev) — installs the pinned `uv`, which manages Python 3.12+ and dependencies
 - A `.env` file (copy from `.env.example`)
 
-### Make Commands
+### mise Tasks
+
+Commands are defined in `mise.toml`; there is no `Makefile`. `mise tasks` lists everything, and `mise -E infra tasks` adds the Terraform tasks.
 
 | Command | Description |
 |---------|-------------|
-| `make run` | Run the Telegram polling bot |
-| `make webhook-dev PUBLIC_URL=https://...` | Run local webhook server (for ngrok testing) |
-| `make test` | `uv run pytest -v` |
-| `make lint` | `uv run ruff check` |
-| `make lint-fix` | `uv run ruff check --fix` |
-| `make format` | `uv run ruff format` |
-| `make format-check` | `uv run ruff format --check` (CI enforces) |
-| `make webhook-info` | Inspect current Telegram webhook config |
-| `make webhook-clear` | Delete Telegram webhook |
+| `mise run setup` | `uv sync --locked` — install locked dependencies |
+| `mise run bot` | Run the Telegram polling bot |
+| `mise run webhook -- --public-url https://...` | Run the local webhook server (for ngrok testing) |
+| `mise run test` | `uv run --locked pytest -q` (pass a file or `-k <pattern>` to narrow) |
+| `mise run lint` | `uv run --locked ruff check` |
+| `mise run lint:fix` | `uv run --locked ruff check --fix` |
+| `mise run format` | `uv run --locked ruff format` |
+| `mise run format:check` | `uv run --locked ruff format --check` (CI enforces) |
+| `mise run check` | `format:check` + `lint` + `test` (the same checks CI runs) |
+| `mise run webhook:info` | Inspect the current Telegram webhook config |
+| `mise run webhook:clear` | Delete the Telegram webhook |
+| `mise run eval:golden` | Export the golden set from Notion and read its sources |
+| `mise run eval` | Measure Triage on the golden set (see `evals/README.md`) |
 
-### Standalone Agent Dev
+### Standalone Triage Dev
 
-Run the agent workflow without Telegram or database:
+Run Triage without Telegram, a database, or Notion writes:
 
 ```sh
-uv run python -m backlog_tamer.dev.run_intake_workflow "some text" --link https://example.com --approve
+uv run --locked python -m backlog_tamer.dev.run_triage URL --note "why I saved it" --revise "rename it to X"
 ```
 
-Uses `InMemorySessionService` — no persistence needed. Useful for iterating on prompts and schemas.
+Reads the source, classifies, and applies each revision in order, printing every draft as JSON with per-step timings. See [Intake Workflow](../workflows/intake-flow.md).
 
 ### Database
 
-Local default is SQLite (`backlog_tamer.db`). Set `DATABASE_URL` to a Postgres URL for production or Supabase testing. The `database_urls.py` module auto-derives the correct sync/async driver pair from the URL scheme.
+Local default is SQLite (`sqlite:///backlog_tamer.db`). Set `DATABASE_URL` to a Postgres URL for production or Supabase testing. `database_urls.to_sync_database_url` derives the sync SQLAlchemy driver from the URL scheme.
 
 ## CI Pipeline
 
-`.github/workflows/ci.yml` runs on every PR and push to `main`:
+`.github/workflows/ci.yml` runs on every PR and push to `main` (and as a reusable `workflow_call`):
 
 | Job | Steps |
 |-----|-------|
-| Python | `ruff format --check`, `ruff check`, `pytest -q` (all with `--locked`) |
+| Python | `ruff format --check`, `ruff check`, `pytest -q` (all with `uv run --locked`) |
 | Terraform | `terraform fmt -check`, `terraform init -backend=false`, `terraform validate` |
 | Docker | `docker buildx build --platform linux/arm64 -t backlog-tamer:ci --load` (native arm64 runner) |
 
@@ -68,7 +73,7 @@ Telegram → Lambda Function URL (webhook_handler)
                       ↓ validates + enqueues
                    SQS Queue ← DLQ (max 3 receives)
                       ↓
-              Lambda (worker_handler) → IntakeService → Notion
+              Lambda (worker_handler) → IntakeService → Triage → Notion
 ```
 
 Both Lambda functions use the same Docker image; the handler name (`webhook_handler` vs `worker_handler`) selects behavior.
@@ -84,7 +89,7 @@ Both Lambda functions use the same Docker image; the handler name (`webhook_hand
 | Resource | Purpose |
 |----------|---------|
 | `aws_ecr_repository.app` | Container image registry |
-| `aws_ecr_lifecycle_policy.app` | Keep last 5 images |
+| `aws_ecr_lifecycle_policy.app` | Keep last 10 `v`-tagged images (rollback targets) |
 | `aws_secretsmanager_secret.app` | Runtime secrets (JSON object with all env vars) |
 | `aws_sqs_queue.updates` | Telegram update queue (visibility timeout = worker timeout + 30s) |
 | `aws_sqs_queue.updates_dlq` | Dead-letter queue (14-day retention) |
@@ -94,26 +99,26 @@ Both Lambda functions use the same Docker image; the handler name (`webhook_hand
 | `aws_cloudwatch_log_group.webhook` | Webhook logs (14-day retention) |
 | `aws_cloudwatch_log_group.worker` | Worker logs (14-day retention) |
 
-Lambda architecture defaults to `arm64`. The worker has a minimum SQS concurrency of 2 (AWS requirement).
+Lambda architecture defaults to `arm64`.
 
 ### Secrets
 
 Runtime secrets are stored as a JSON object in AWS Secrets Manager. The Lambda `_load_runtime_secrets()` function reads the secret on cold start, gated by the `BACKLOG_TAMER_SECRET_ARN` environment variable that Terraform sets on both Lambda functions: if the ARN is absent it skips loading (local/dev runs have no secret), otherwise it calls `secretsmanager:GetSecretValue`, parses the `SecretString` as JSON, and sets each key-value as an environment variable via `os.environ.setdefault()`. After loading, it clears the `get_settings` LRU cache so `pydantic-settings` re-reads the new env vars. The IAM role is granted `secretsmanager:GetSecretValue` on the secret ARN only (`infra/terraform/main.tf`).
 
-The secret JSON should contain every required key from `.env.example` (including `OPENROUTER_API_KEY`, `BROWSERBASE_API_KEY`, the Telegram and Notion settings, and `DATABASE_URL`); optional settings absent from the JSON retain their `Settings` defaults. Loading uses `os.environ.setdefault()`, so a key already present in the Lambda environment takes precedence over the secret value — the secret fills only keys that are unset. The required model key is `OPENROUTER_API_KEY` (direct OpenAI credentials are no longer used); `AGENT__MODEL` must be a publisher-qualified OpenRouter slug such as `openai/gpt-6-luna`. The required source-reading key is `BROWSERBASE_API_KEY`. The local `.env` file is not shipped to Lambda — but the secret is not the only possible source of runtime configuration: Lambda environment variables set by Terraform or the runtime can also contribute values and, because of `setdefault`, they win over the secret.
+The secret JSON should contain every required key from `.env.example` (including `OPENROUTER_API_KEY`, `BROWSERBASE_API_KEY`, the Telegram and Notion settings, and `DATABASE_URL`); optional settings absent from the JSON retain their `Settings` defaults. Loading uses `os.environ.setdefault()`, so a key already present in the Lambda environment takes precedence over the secret value — the secret fills only keys that are unset. The required model keys are `OPENROUTER_API_KEY` (direct OpenAI credentials are no longer used); `TRIAGE__DECISION_MODEL` and `TRIAGE__TITLE_MODEL` are optional OpenRouter slugs (defaults `perplexity/pplx-decider-v1.3:free` and `openai/gpt-6-luna`). The required source-reading key is `BROWSERBASE_API_KEY`. The local `.env` file is not shipped to Lambda.
 
 ### Release Workflow
 
 `.github/workflows/release.yml` owns the release lifecycle. On every push to `main`, [release-please](https://github.com/googleapis/release-please) maintains a standing release PR that bumps `pyproject.toml` and writes `CHANGELOG.md` from conventional commits. Merging that PR cuts a tag and GitHub release, which triggers CI as a reusable workflow gate and then deploys:
 
-1. **release-please** — creates/updates the release PR. Configured via `release-please-config.json` (release type `python`, `include-v-in-tags`, `include-component-in-tag: false` so tags are `v0.6.1` not `backlog-tamer-v0.6.1`, bootstrap SHA `8712113`). Version tracked in `.release-please-manifest.json` (currently `0.6.1`).
-2. **relock** — re-runs `uv lock` on the release PR branch to keep `uv.lock` in sync with the version bump (release-please force-pushes the branch, so this commit is ephemeral and re-applied each run).
+1. **release-please** — creates/updates the release PR. Configured via `release-please-config.json` (release type `python`, `include-v-in-tags`, `include-component-in-tag: false` so tags are `v0.8.0` not `backlog-tamer-v0.8.0`, bootstrap SHA `8712113`). Version tracked in `.release-please-manifest.json` (currently `0.8.0`).
+2. **relock** — re-runs `uv lock` on the release PR branch to keep `uv.lock` in sync with the version bump.
 3. **CI** — re-runs the full CI suite against the release commit as a synchronous gate.
 4. **Deploy** — invoked as a reusable `workflow_call` with the release tag as `version` input.
 
 ### Deploy Workflow
 
-`.github/workflows/deploy.yml` is invoked by the release workflow (`workflow_call`) or manually (`workflow_dispatch`). Both paths require a `version` input (e.g. `v0.2.0`). The old `workflow_run` auto-trigger on CI pass has been removed — deploys are now release-driven:
+`.github/workflows/deploy.yml` is invoked by the release workflow (`workflow_call`) or manually (`workflow_dispatch`). Both paths require a `version` input (e.g. `v0.8.0`). Deploys are release-driven:
 
 1. Configure AWS credentials via OIDC role (`AWS_ROLE_ARN`).
 2. Checkout the release tag (`ref: ${{ inputs.version }}`).
@@ -123,12 +128,22 @@ The secret JSON should contain every required key from `.env.example` (including
 6. If the image is missing, build and push to ECR tagged with both `$VERSION` and `sha-$GITHUB_SHA`.
 7. `terraform apply -auto-approve` with `image_tag=$VERSION`.
 8. **Post-deploy smoke tests:**
-   - **Worker healthcheck** — invokes the worker Lambda with `{"healthcheck": true}`, which eagerly imports agent, Notion, and `source_reader` modules, validates the full `Settings` model (so a missing `OPENROUTER_API_KEY` or `BROWSERBASE_API_KEY` in the runtime secret fails here; source extraction deps `browserbase`/`stagehand`/`pypdf` are required imports so a missing package fails the image probe), probes the Notion schema and raises if required properties are missing, asserts the deployed version matches the release tag, and reports `skipped_notion_properties` plus `degraded_capabilities` (a missing `Source` column surfaces as `["duplicate-detection"]`). See [Telegram and Notion Integrations](../integrations/telegram-and-notion.md) for the healthcheck implementation.
-   - **Webhook auth rejection** — sends an unsigned request to the webhook Lambda and asserts a `403` response. A `503` would mean `TELEGRAM__WEBHOOK_SECRET` is not configured (the handler now fails closed); a `200` would mean the webhook is accepting requests without validation.
+   - **Worker healthcheck** — invokes the worker Lambda with `{"healthcheck": true}`, which eagerly imports `source_reader`, calls `Triage.from_settings(settings).probe()` (which calls the configured decision and title models once each, so a retired slug or bad `OPENROUTER_API_KEY` fails the deploy), probes the Notion Projects schema and raises if required properties are missing, asserts the deployed version matches the release tag, and reports `models`, `skipped_notion_properties`, and `degraded_capabilities` (a missing `Source` column surfaces as `["duplicate-detection"]`). The deploy asserts both models are reported. See [Telegram and Notion Integrations](../integrations/telegram-and-notion.md) for the healthcheck implementation.
+   - **Webhook auth rejection** — sends an unsigned request to the webhook Lambda and asserts a `403` response. A `503` would mean `TELEGRAM__WEBHOOK_SECRET` is not configured; a `200` would mean the webhook is accepting requests without validation.
 
 Terraform outputs `webhook_function_name` and `worker_function_name` for the smoke tests.
 
 Requires a `production` GitHub environment with variables: `AWS_REGION`, `AWS_ROLE_ARN`, `TF_STATE_BUCKET`.
+
+### Rollback
+
+Roll back by dispatching the Deploy workflow with a previous tag — the image already exists in ECR, so the build is skipped and only `terraform apply` runs:
+
+```sh
+gh workflow run deploy.yml -f version=v0.8.0
+```
+
+Rolling back past the decision-triage cutover to `v0.8.0` (the last agent release) works, but Reviews created after the cutover cannot be revised or approved there: v0.8.0 resumes agent sessions they never had. The legacy `confirmations` columns and the `AGENT__*` / `NOTION_TASKS_DATABASE_ID` secret keys are kept for that until the rollback window closes.
 
 ### Manual Build and Push
 
@@ -148,23 +163,21 @@ terraform -chdir=infra/terraform init -backend-config=backend.hcl -migrate-state
 
 ### Post-Deployment
 
-After deployment, register the Telegram webhook to the Lambda Function URL (output as `webhook_function_url`) with the configured webhook secret.
+After deployment, register the Telegram webhook to the Lambda Function URL (output as `webhook_function_url`) with the configured webhook secret. The deploy does not register it, so after `mise run webhook:clear` (for local polling) set it again the same way.
 
 ## Key Operations Notes
 
-- **Update deduplication** — The Lambda worker uses `TelegramStateStore.record_update_once` to skip duplicate `update_id` values from SQS retries. This is separate from the ADK session state.
-- **NullPool and asyncpg statement cache for external poolers** — When using Supabase's transaction-mode pooler (port 6543, `pooler.supabance.com` in URL), `ConfirmationStore` and `TelegramStateStore` use `NullPool`, and the ADK `DatabaseSessionService` async engine gets `connect_args={"statement_cache_size": 0}`. This fixes asyncpg's "prepared statement does not exist" error behind PgBouncer, where each transaction lands on a different backend. Detection is via `uses_external_pooler()` in `database_urls.py`.
-- **LangSmith tracing** — Enabled lazily in `IntakeService` when `LANGSMITH_API_KEY` is set. `Settings.export_to_env()` populates the LangSmith env vars from the settings model.
-- **google-adk version** — Pinned to ≥2.4.0 because of a fix (commit `41409b4`) where `run_async` `state_delta` did not reach workflow nodes in earlier versions.
-- **Stagehand v4 + ADK websockets pin** — `pyproject.toml` overrides `websockets` to `>=16.1.1,<17` to reconcile Stagehand v4 with ADK's version pin for this application's HTTP-backed `run_async` workflow (no Gemini Live). When changing `stagehand`, `browserbase`, or `google-adk`, re-verify the locked suite and a live source-backed Triage turn, since a WebSocket-version mismatch can surface only at runtime.
-- **Secrets Manager rollout (OpenRouter + Browserbase migration)** — Before a source-reader or model change reaches production, add `OPENROUTER_API_KEY` and `BROWSERBASE_API_KEY` to the runtime JSON secret in Secrets Manager and convert any existing `AGENT__MODEL` value to its publisher-qualified OpenRouter slug (e.g. `openai/gpt-6-luna`). The worker healthcheck validates the full `Settings` model (which requires non-blank `OPENROUTER_API_KEY` and `BROWSERBASE_API_KEY`) and imports the agent and `source_reader`, but does not authenticate with the model or open a browser session, so verify a real intake and review after deployment. Keep the previous image's credentials available during the rollback window, then remove the obsolete secret entries after it closes. The auth-error path propagates without fallback (pinned by `tests/test_agent_model.py`), so a missing or wrong key surfaces as a failed intake rather than silent degradation.
+- **Update deduplication** — The Lambda worker uses `TelegramStateStore.record_update_once` to skip duplicate `update_id` values from SQS retries.
+- **NullPool for external poolers** — When using Supabase's transaction-mode pooler (`pooler.supabase.com` in the URL), `ConfirmationStore` and `TelegramStateStore` use `NullPool` via `uses_external_pooler()` in `database_urls.py`. (The asyncpg statement-cache workaround for the ADK session service is gone with ADK.)
+- **Free decision model is temporary** — `perplexity/pplx-decider-v1.3:free` ends around mid-December 2026. The deploy healthcheck probes both models, so a dead slug fails the deploy; switching is one setting (`TRIAGE__DECISION_MODEL`), and `mise run eval -- --model <slug>` measures a replacement first.
+- **Secrets Manager rollout** — Before a model or source-reader change reaches production, add `OPENROUTER_API_KEY` and `BROWSERBASE_API_KEY` to the runtime JSON secret in Secrets Manager. The worker healthcheck validates the full `Settings` model (which requires non-blank `OPENROUTER_API_KEY` and `BROWSERBASE_API_KEY`) and calls `Triage.probe()` (which calls both models), but does not open a browser session, so verify a real intake and review after deployment. Keep the previous image's credentials available during the rollback window.
 
 ## Source References
 
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Lambda container image build |
-| `Makefile` | Local dev commands |
+| `mise.toml` | Local dev tasks (setup, bot, webhook, test, lint, eval) |
 | `.github/workflows/ci.yml` | CI pipeline (reusable via `workflow_call`) |
 | `.github/workflows/deploy.yml` | CD pipeline (release-driven, smoke tests) |
 | `.github/workflows/release.yml` | Release-please lifecycle, relock, CI gate, deploy |
@@ -175,4 +188,5 @@ After deployment, register the Telegram webhook to the Lambda Function URL (outp
 | `infra/terraform/outputs.tf` | Terraform outputs |
 | `scripts/build_and_push_image.sh` | Manual image build/push |
 | `src/backlog_tamer/integrations/telegram/lambda_handlers.py` | Lambda handlers and secret loading |
+| `src/backlog_tamer/dev/run_triage.py` | Standalone Triage runner for dev |
 | `scripts/migrate_notion_schema.py` | One-time Notion schema migration (add optional columns + backfill) |

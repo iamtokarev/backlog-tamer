@@ -2,49 +2,45 @@
 type: Architecture Overview
 title: Architecture Overview
 description: >-
-  Three-layer architecture of Backlog Tamer: AI agent workflow (Google ADK),
-  application orchestration (IntakeService + ConfirmationStore), and
-  integrations (Telegram + Notion).
+  Three-layer architecture of Backlog Tamer: decision-model Triage, application
+  orchestration (IntakeService + ConfirmationStore), and integrations (Telegram
+  + Notion + Browserbase source reading).
 tags: [architecture, overview]
-timestamp: 2025-01-20T00:00:00Z
+timestamp: 2026-11-06T00:00:00Z
 ---
 
 # Architecture Overview
 
-Backlog Tamer is structured in three layers under `src/backlog_tamer/`. Each layer has a clear responsibility and the layers connect through well-defined interfaces.
+Backlog Tamer is structured in three layers under `src/backlog_tamer/`. Each layer has a clear responsibility and the layers connect through well-defined interfaces. The design replaced an earlier Google ADK drafting agent with stateless decision-model Triage; [ADR 0001](https://github.com/iamtokarev/backlog-tamer/blob/main/docs/adr/0001-triage-by-decision-models.md) records the reasoning.
 
 ## Layers
 
-### 1. Agent Layer — `agents/intake_triage/`
+### 1. Triage Layer — `triage/`
 
-The AI triage layer. A Google ADK `Agent` wraps an OpenRouter model through ADK's `LiteLlm` adapter and produces a structured `ProjectDraft` as output. The agent is embedded in a `Workflow` graph that implements the human-in-the-loop approval cycle using ADK interrupts. A facade class, `TriageWorkflow`, wraps the ADK `Runner` and session service and exposes typed `TurnOutcome` results (`NeedsReview`, `Approved`, `Rejected`) so the application layer never touches ADK internals directly.
+The decision layer. `Triage` (`triage.py`) is a stateless deep module with two operations — `classify` and `revise` — each returning a `ProjectDraft`. There is no ADK `Runner`, no session service, no `Checkpoint`, no interrupt, and no engine switch: the decision model answers typed questions over a fixed Label set, and one small LLM call writes the title.
 
-- **`agent.py`** — defines `draft_agent` (the LLM agent) and `root_agent` (the workflow wrapping the agent). The agent uses `output_schema=ProjectDraft` and `output_key="draft_proposal"` to write structured drafts into session state. `_get_model` builds the `LiteLlm` adapter with `model=f"openrouter/{config.model}"`, `api_base="https://openrouter.ai/api/v1"`, and the OpenRouter key from `Settings`, and passes native `reasoning.effort` plus `provider.require_parameters=true` via `extra_body` (see Key Design Decisions below).
-- **`triage_workflow.py`** — `TriageWorkflow`, the agent-layer facade that owns the ADK `Runner` and `DatabaseSessionService`. Its methods (`start`, `revise`, `refetch`, `approve`, `reject`) each run one ADK turn and return a `TurnOutcome`: `NeedsReview` (draft + `Checkpoint` + grounding + review message), `Approved`, or `Rejected` (with the draft for the review card). `from_settings` lazily imports the agent module so the LLM client is only built when a workflow is actually constructed. The opaque `Checkpoint` dataclass bundles the `session_id`, `invocation_id`, and `request_input_call_id` needed to resume a paused turn.
-- **`workflow.py`** — builds the ADK `Workflow` graph: `draft → request_human_review → handle_human_review → {approved, rejected, revise}`. The `request_human_review` node emits a `RequestInput` interrupt that pauses execution until the user responds. `build_triage_message`/`build_triage_state_delta` thread the workspace's existing Notion tag vocabulary (`known_topics`) into the drafting prompt.
-- **`prompts.py`** — system instructions, triage prompt templates (with the compact `project_type` vocabulary and the existing-tags hint), review message templates, revision prompt builder, `REFETCH_FEEDBACK` (the instruction sent on a refetch turn), and `build_revision_feedback` (prepends the user's quick-edit `kept_fields` so a revision does not silently undo them).
-- **`schemas.py`** — Pydantic models: `IncomingContext`, `ProjectDraft` (with `short_name`, `effective_short_name`, `project_type`, and the `migrate_legacy_resource_type` validator), `DraftGrounding` (fetch results summary with `is_degraded` property), `SourceLink`, `ReviewDecision`. (`FetchedUrl` is defined only in `integrations/source_reader.py`; `schemas.py` neither defines nor re-exports it.)
-- **`task_names.py`** — composes the default task name as `"<verb>: <short_name>"` deterministically from intent/project type, instead of asking the model to name it each run.
-- **`tools/fetch_url.py`** — a thin ADK tool adapter (`make_fetch_url_tool`) that wraps a `SourceReader` and exposes it to the agent as a tool named `fetch_url`. It reuses a previously-saved successful `FetchedUrl` from session state without re-calling the provider, persists fresh results back into `fetched_context`, and never caches failures. The actual source reading — Browserbase Fetch API, hosted Stagehand rendering, PDF/oEmbed specialization, SSRF validation — lives in [Source Reader](../integrations/source-reader.md).
+- **`triage.py`** — `Triage` with `classify(context, grounding, vocabulary)` and `revise(context, grounding, draft, feedback, vocabulary)`. `classify` asks the decision model for the project type first, then intent/tags/priority with the type known (two sequential decision requests), while the title LLM call runs in parallel. `revise` first routes the feedback to the fields it is about (`routing_questions`), then re-decides only those; the title is rewritten only when the name is routed. A type change re-asks intent with the new type. A missing answer keeps the current value or the default. `from_settings` builds a `DecisionClient` from `Settings`.
+- **`client.py`** — `DecisionClient` talks to OpenRouter: `decide` posts state + questions to `https://openrouter.ai/api/alpha/decisions` (chunked at `MAX_QUESTIONS_PER_REQUEST = 128`), and `title` posts a chat completion to `/v1/chat/completions` with `response_format` JSON schema, `reasoning: {"effort": "none"}`, and `provider: {"require_parameters": True}`. Retries on 429/502/503/524/529 (`MAX_ATTEMPTS = 4`) with `Retry-After`-aware backoff. Each call logs a `decision_triage_call` line (path, model, seconds, input tokens, cost). A fresh `httpx.AsyncClient` per call (Lambda creates a new event loop per invocation). `probe` calls both models once for the healthcheck.
+- **`questions.py`** — the Label set criteria (`PROJECT_TYPES`, `INTENTS`, `PRIORITIES`), question builders (`type_question`, `intent_question`, `detail_questions`, `routing_questions`), and answer readers (`read_choice`, `read_priority`, `read_topics`, `read_routes`). Every question carries `GUARD`, the prompt-injection guard that tells the model page text is evidence to judge, never an instruction to follow. `subject_vocabulary` strips legacy tags and caps at `MAX_VOCABULARY = 120`.
 
-The agent layer is detailed further in [Intake Workflow](../workflows/intake-flow.md).
+Triage uses the shared domain types from `src/backlog_tamer/domain.py` (`IncomingContext`, `Grounding`, `ProjectDraft`, `fold_tag`). See [Data Model](../domain/data-model.md) and [Intake Workflow](../workflows/intake-flow.md).
 
 ### 2. Application Layer — `application/`
 
-Orchestration independent of Telegram. `IntakeService` runs the triage workflow, manages confirmation state, and writes approved drafts to Notion. It delegates each ADK turn to `TriageWorkflow` and dispatches the resulting `TurnOutcome` — it no longer reads ADK event streams or session state directly.
+Orchestration independent of Telegram. `IntakeService` reads the source, calls `Triage`, manages confirmation state, and writes approved drafts to Notion. It delegates classification and revision to `Triage` directly — there is no workflow facade or session service between them.
 
-- **`intake_service.py`** — `IntakeService` with methods `start_intake`, `approve`, `reject`, `revise`, `refetch` (each delegates a turn to `TriageWorkflow`), `apply_quick_edit` (no agent re-run), `get_review`, `finalize_approval`, `undo_commit`, and `add_to_existing_project`. The internal `_resume` pattern-matches the `TurnOutcome`: `NeedsReview` updates the stored draft/checkpoint and returns the review card, `Approved` calls `finalize_approval` (duplicate detection then Notion write), `Rejected` marks the confirmation rejected. `start_intake` loads the existing Notion tag vocabulary via `_known_topics` → `NotionWriter.list_tag_options()` and passes it into the workflow. `_log_corrections` emits a structured `intake_correction` line at approval so quick-edit corrections remain measurable.
-- **`confirmation_store.py`** — `ConfirmationStore` using SQLAlchemy with a `confirmations` table. Provides `mark_committing_once` as an idempotency lock to prevent duplicate Notion writes (also accepts `FAILED` for retry). Supports `apply_manual_edit` for quick-edit button changes (records `ManualEdit(before, after)` pairs, normalizes legacy `resource_type` to `project_type`), `update_after_resume` (writes the new draft and `Checkpoint` after a revision turn), `mark_duplicate`, `mark_undone`, and `mark_committed` with task IDs. The store maps `ConfirmationRecord.checkpoint` onto the existing `session_id`/`invocation_id`/`request_input_call_id` columns.
-- **`models.py`** — `ConfirmationRecord` (with `checkpoint: Checkpoint`, `grounding`, `manual_edits: dict[str, ManualEdit]`, `notion_task_ids`; `corrected_fields` and `kept_fields` properties), `ManualEdit` (before/after pair with `coerce` for legacy rows), `ConfirmationStatus` (enum: `PENDING_REVIEW → COMMITTING → COMMITTED / REJECTED / FAILED / UNDONE / DUPLICATE`), `IntakeResult` (with `grounding`, `duplicate_created_time`, `failure_reason` fields).
-- **`database_urls.py`** — converts a single `DATABASE_URL` into the sync driver (psycopg/sqlite) for `ConfirmationStore` and the async driver (asyncpg/aiosqlite) for ADK `DatabaseSessionService`. Also provides `uses_external_pooler` and `async_engine_options` for Supabase transaction-pooler compatibility (disables asyncpg statement caching and uses `NullPool`).
+- **`intake_service.py`** — `IntakeService` with `start_intake` (read first link → `Triage.classify` → persist `ConfirmationRecord`), `revise` (→ `Triage.revise` → re-apply quick edits via `with_edits`), `refetch` (re-read → re-classify → re-apply quick edits), `approve`, `reject`, `apply_quick_edit` (no model call; patches the stored draft), `get_review`, `finalize_approval`, `undo_commit`. `finalize_approval` uses `mark_committing_once` as an idempotency lock, then duplicate detection (`find_project_by_source`), then `NotionWriter.create_project`. `_known_topics` loads the existing Notion tag vocabulary via `NotionWriter.list_tag_options()` and passes it into `Triage`; best-effort, never blocks a capture. `_log_corrections` emits a structured `intake_correction` line at approval. `add_to_existing_project` is gone — drafts carry no tasks.
+- **`confirmation_store.py`** — `ConfirmationStore` using SQLAlchemy with a `confirmations` table. `mark_committing_once` atomically transitions `PENDING_REVIEW` or `FAILED` → `COMMITTING` (idempotency lock; returns `acquired=False` if already committing/committed). `apply_manual_edit` patches the stored draft in place and records `ManualEdit(before, after)`. `update_draft` replaces the draft (and grounding) after a revision/refetch. Also `mark_committed`, `mark_duplicate`, `mark_undone`, `mark_failed`, `mark_rejected`. Legacy columns (`session_id`, `invocation_id`, `request_input_call_id`, `review_message`, `notion_task_ids_json`) are kept with empty defaults for rollback to v0.8.0 but neither written meaningfully nor read.
+- **`models.py`** — `ConfirmationRecord` (no `checkpoint`, no `notion_task_ids`, no `review_message`; `manual_edits: dict[str, ManualEdit]`, `kept_fields` and `corrected_fields` properties), `ManualEdit` (before/after with `coerce` for legacy rows), `ConfirmationStatus` enum (`PENDING_REVIEW → COMMITTING → COMMITTED / REJECTED / FAILED / UNDONE / DUPLICATE`), `IntakeResult`.
+- **`database_urls.py`** (top level) — `to_sync_database_url` converts a `DATABASE_URL` into the sync driver (psycopg/sqlite); `uses_external_pooler` detects Supabase transaction-mode pooler. Only sync drivers are needed now — the async ADK `DatabaseSessionService` is gone.
 
 ### 3. Integrations Layer — `integrations/`
 
-External system connections. Telegram provides three entry points that all share the same handlers; Notion is the write target for approved drafts.
+External system connections. Telegram provides three entry points that all share the same handlers; Notion is the write target for approved drafts; Browserbase is the source reader.
 
-- **`telegram/`** — `bot.py` (local polling), `webhook_dev.py` (local webhook server), `lambda_handlers.py` (deployed: webhook receives and enqueues to SQS, worker dequeues and processes). `handlers.py` contains the shared `handle_message` and `handle_callback` logic, handling approve/reject/revise plus quick edits, refetch, retry, undo, and add-task-to-duplicate. `webhook.py` has `TelegramUpdateProcessor` and webhook validation. `parsing.py` extracts `IncomingContext` from Telegram messages. `rendering.py` builds HTML messages, inline keyboards (review, picker, terminal), and change summaries. `state.py` persists revision state and deduplicates updates, using `NullPool` for external poolers.
-- **`notion/writer.py`** — `NotionWriter` creates project pages (with page-body children: bookmark, note, key points, to-do tasks, provenance callout) and task pages in Notion databases. Also performs duplicate detection (`find_project_by_source`), tag vocabulary lookup (`list_tag_options`, fed into the drafting prompt), schema fitting (`_fit_to_schema` drops properties missing from the target database, and renames `Project type` to legacy `Type` when needed; property definitions cached in `_schema_cache`), canonical source URL selection (`commit_source_url`), undo (`archive_pages`), and schema health reporting (`describe_schema` for the healthcheck, including `degraded_capabilities` for gaps that disable a feature). Sets page icons from project type, due dates from priority, and topic-based tags folded onto existing tag spellings.
-- **`source_reader.py`** — `SourceReader` reads a public URL into a `FetchedUrl` Grounding result (or a structured failure) through Browserbase Fetch API and hosted Stagehand rendering, with local SSRF validation, an extraction escalation ladder (oEmbed → Fetch raw → Fetch JSON → browser render), PDF parsing via `pypdf`, and a per-invocation client lifecycle for Lambda. URL identity helpers (`normalize_source_url`, `strip_tracking_params`, `youtube_watch_url`) live in `source_urls.py`. See [Source Reader](../integrations/source-reader.md).
+- **`telegram/`** — `bot.py` (local polling), `webhook_dev.py` (local webhook server), `lambda_handlers.py` (deployed: webhook receives and enqueues to SQS, worker dequeues and processes). `handlers.py` contains the shared `handle_message` and `handle_callback` logic. `webhook.py` has `TelegramUpdateProcessor` and webhook validation. `parsing.py` extracts `IncomingContext` from Telegram messages. `rendering.py` builds HTML messages and inline keyboards. `state.py` persists revision state and deduplicates updates. `callbacks.py` encodes/decodes the inline-keyboard `callback_data` wire format.
+- **`notion/writer.py`** — `NotionWriter.create_project` creates a single project page (with body children: bookmark, note, key points, provenance callout). No task pages, no tasks database, no `add_tasks_to_project`. Also `find_project_by_source` (duplicate detection), `list_tag_options` (tag vocabulary), `describe_schema` (healthcheck), `archive_pages` (undo), and `_fit_to_schema` (drops properties missing from the target database).
+- **`source_reader.py`** — `SourceReader.read` turns a public URL into a `FetchedUrl` Grounding result (or a structured failure) through Browserbase Fetch API and hosted Stagehand rendering, with local SSRF validation and an extraction escalation ladder. `FetchedUrl.to_grounding()` converts it into the shared `Grounding` type. See [Source Reader](../integrations/source-reader.md).
 
 The integrations are detailed in [Telegram & Notion Integrations](../integrations/telegram-and-notion.md).
 
@@ -63,68 +59,64 @@ flowchart TD
     end
 
     subgraph "Application"
-        IS["IntakeService — start/approve/reject/revise/refetch"]
+        IS["IntakeService — start/revise/refetch/approve"]
         CS["ConfirmationStore SQLAlchemy"]
     end
 
-    subgraph "Agent (Google ADK)"
-        TW["TriageWorkflow — typed TurnOutcome per turn"]
-        WF["Workflow — draft, review, approve/reject/revise"]
-        DS["DatabaseSessionService ADK sessions"]
+    subgraph "Triage (decision models)"
+        T["Triage — classify / revise"]
+        DC["DecisionClient — OpenRouter"]
     end
 
     subgraph "Notion"
-        NW["NotionWriter create_project_with_tasks"]
+        NW["NotionWriter create_project"]
     end
 
     subgraph "Source Reading"
         SR["SourceReader — Browserbase Fetch + Stagehand"]
-        FU["fetch_url tool adapter (caching)"]
     end
 
     A1 --> H
     A2 --> H
     A3 --> H
-    H -->|"start_intake / approve / revise"| IS
-    IS -->|"delegates turn"| TW
-    TW -->|"runs workflow"| WF
-    WF -->|"persists sessions"| DS
-    WF -->|"agent calls fetch_url"| FU
-    FU -->|"reads URL"| SR
+    H -->|"start_intake / revise / refetch"| IS
+    IS -->|"classify / revise"| T
+    T -->|"decide / title"| DC
+    IS -->|"reads first link"| SR
     IS -->|"persists confirmation"| CS
-    IS -->|"on Approved"| NW
+    IS -->|"on approval"| NW
 ```
 
-*Three-layer architecture: Telegram entry points dispatch through shared handlers to IntakeService, which delegates each turn to TriageWorkflow and writes approved drafts to Notion. The agent's `fetch_url` tool adapts a `SourceReader` backed by Browserbase.*
+*Three-layer architecture: Telegram entry points dispatch through shared handlers to IntakeService, which reads the source, calls Triage for classification/revision, persists confirmation state, and writes approved drafts to Notion.*
 
 ## Key Design Decisions
 
-- **Human-in-the-loop via ADK interrupts, not chat turns.** The workflow pauses at `request_human_review` by emitting a `RequestInput` interrupt. `TriageWorkflow` extracts the interrupt from the event stream, wraps the resume coordinates in an opaque `Checkpoint`, and returns a `NeedsReview` outcome. A later call (`approve`, `reject`, `revise`, or `refetch`) resumes the paused turn through the `Checkpoint`, and `TriageWorkflow` maps the outcome to `Approved` or `Rejected`. `IntakeService` only ever sees typed outcomes — it never inspects ADK events.
-- **TriageWorkflow as the ADK boundary.** `TriageWorkflow` (`triage_workflow.py`) is the only component that imports `Runner`, `DatabaseSessionService`, or event-stream parsing. This lets `IntakeService` depend on a simple protocol (`start`/`revise`/`refetch`/`approve`/`reject` → `TurnOutcome`) and makes the intake flow testable with a `ScriptedTriageWorkflow` that queues outcomes without running ADK (`tests/test_intake_flow.py`).
-- **Dual database drivers from one URL.** `database_urls.py` derives both sync (for `ConfirmationStore`) and async (for ADK `DatabaseSessionService`) connection strings from a single `DATABASE_URL`, supporting SQLite locally and Postgres/Supabase in production.
-- **Idempotent Notion commits.** `mark_committing_once` atomically transitions a confirmation from `PENDING_REVIEW` to `COMMITTING`, preventing duplicate writes if `finalize_approval` is called multiple times.
+- **Decision models, not a drafting agent.** Triage asks a decision model typed questions over a fixed Label set and one title LLM call, instead of an ADK agent that wrote prose summaries and tasks nobody used. This matched agent quality at a fraction of the latency (≈1 s vs 15–22 s) and stopped revisions from rewriting fields the feedback never mentioned. There is no fallback to the agent. See [ADR 0001](https://github.com/iamtokarev/backlog-tamer/blob/main/docs/adr/0001-triage-by-decision-models.md).
+- **Stateless Triage.** `Triage` holds no session, checkpoint, or interrupt state. `classify` and `revise` take the context, grounding, and draft as arguments and return a new `ProjectDraft`. `IntakeService` owns all durable state through `ConfirmationStore`; a revision re-runs `Triage.revise` and re-applies the user's quick edits via `ProjectDraft.with_edits`.
+- **Revision routes first, then re-decides.** `Triage.revise` asks routing questions (`change_<field>`) to identify which fields the feedback is about, then re-decides only those. A type change re-asks intent with the new type. Unrelated fields are kept, so a revision never silently undoes a quick edit.
+- **Quick edits win over revisions.** Quick-edit button changes last for the whole review and are re-applied after every revision and refetch via `kept_fields` → `ProjectDraft.with_edits`. `Triage` never sees them.
+- **No Tasks.** A draft is a project only; the user creates tasks themselves in Notion. `notion_tasks_database_id` is gone from `Settings`.
+- **Dual drivers from one URL (sync only).** `database_urls.to_sync_database_url` derives the sync SQLAlchemy driver from a single `DATABASE_URL`. The async ADK session service and its async engine options are gone.
+- **Idempotent Notion commits.** `mark_committing_once` atomically transitions a confirmation from `PENDING_REVIEW` or `FAILED` to `COMMITTING`, preventing duplicate writes if `finalize_approval` is called multiple times. `FAILED` is retryable without re-running Triage.
 - **Three Telegram entry points, shared handlers.** All three entry points (`bot.py`, `webhook_dev.py`, `lambda_handlers.py`) build the same `Application` via `build_application` and use the same `handle_message` / `handle_callback` handlers.
-- **SQS queue in production.** The Lambda webhook handler validates and enqueues; the Lambda worker handler dequeues and processes. This decouples Telegram's webhook timeout from the potentially slow agent workflow.
-- **OpenRouter via ADK `LiteLlm`, with native reasoning parameters.** The agent talks to OpenRouter exclusively through ADK's `LiteLlm` adapter (`agent.py::_get_model`), using `api_base="https://openrouter.ai/api/v1"` and the root `OPENROUTER_API_KEY` from `Settings` — direct OpenAI credentials and endpoints are no longer used. `AGENT__MODEL` is an OpenRouter slug including its publisher (default `openai/gpt-6-luna`; the adapter adds the `openrouter/` transport prefix), so a different publisher can be selected by changing one setting (e.g. `anthropic/claude-sonnet-5`). The adapter sends native `reasoning.effort` (from `AgentConfig`, default `"medium"`, settable via `AGENT__REASONING_EFFORT` with options `none`, `low`, `medium`, `high`) and `provider.require_parameters=true` through `extra_body` rather than relying on LiteLLM's model-metadata parameter whitelist. Explicit `reasoning.effort` preserves the configured medium effort by sending OpenRouter's native reasoning object, so the value is forwarded instead of being dropped silently through LiteLLM's parameter whitelist; `provider.require_parameters=true` selects endpoints that support the requested parameters (capability-aware routing, as OpenRouter's structured-output guidance recommends). The request shape — OpenRouter URL, bearer key, model slug, `reasoning`/`provider` body, publisher override, and auth-error propagation without fallback — is pinned by `tests/test_agent_model.py`.
-- **Classification as a correction signal, not a taxonomy.** A week of traces showed 7/7 approvals with zero revisions while classification was wrong: the review signal and the taxonomy had both stopped carrying information. The response (commit `e5ca04f`) expanded `project_type` with `article`, `video`, and `course`; composed the default task name deterministically in code (`task_names.py`) instead of leaving it to the prompt; replaced the "default to Medium" priority escape hatch with a rubric; fed the existing tag vocabulary into the prompt; stored the canonical source URL so duplicate detection could match; and recorded what the agent proposed beside what the user picked (`ManualEdit.before/after`, logged at approval) so quick-edit corrections became a measurable per-field accuracy signal.
-- **Canonical source URL for duplicate detection.** `normalize_source_url` (in `source_urls.py`) strips campaign parameters (`utm_*`, `fbclid`, `gclid`, …) from the normalized URL, `NotionWriter` stores `grounding.canonical_url` via `commit_source_url`, and `find_project_by_source` looks up by canonical URL — so a re-capture of the same page through a different tracking link matches its earlier row instead of creating a duplicate. YouTube links are normalized to a single watch URL (`youtube_watch_url`) so `youtu.be`, `/shorts/`, `/live/`, `/embed/`, and `/v/` variants all resolve to `https://www.youtube.com/watch?v={id}`; the page's own JS-templated `<link rel="canonical">` can render as `youtube.com/undefined` to datacenter IPs, so the watch URL derived from the link is pinned instead by the `SourceReader`. See [Source Reader](../integrations/source-reader.md).
+- **SQS queue in production.** The Lambda webhook handler validates and enqueues; the Lambda worker handler dequeues and processes. This decouples Telegram's webhook timeout from the potentially slow Triage calls.
+- **Canonical source URL for duplicate detection.** `normalize_source_url` (in `source_urls.py`) strips campaign parameters; `NotionWriter` stores `grounding.canonical_url` via `commit_source_url`; `find_project_by_source` looks up by canonical URL. See [Source Reader](../integrations/source-reader.md).
 
 ## Source References
 
 | File | Purpose |
 |------|---------|
-| `src/backlog_tamer/agents/intake_triage/agent.py` | Agent and workflow assembly |
-| `src/backlog_tamer/agents/intake_triage/triage_workflow.py` | `TriageWorkflow` — ADK facade, `Checkpoint`, `TurnOutcome` types |
-| `src/backlog_tamer/agents/intake_triage/workflow.py` | ADK workflow graph definition |
-| `src/backlog_tamer/agents/intake_triage/prompts.py` | Prompt templates; existing-tags hint (`MAX_KNOWN_TOPICS`); `REFETCH_FEEDBACK`, `build_revision_feedback` |
-| `src/backlog_tamer/agents/intake_triage/task_names.py` | Deterministic default task name composition |
+| `src/backlog_tamer/triage/triage.py` | `Triage` — `classify`, `revise`, `from_settings` |
+| `src/backlog_tamer/triage/client.py` | `DecisionClient` — OpenRouter decisions + title calls, retries, usage logging |
+| `src/backlog_tamer/triage/questions.py` | Label set criteria, question builders, answer readers, `GUARD` |
+| `src/backlog_tamer/domain.py` | `IncomingContext`, `Grounding`, `ProjectDraft`, `fold_tag` |
 | `src/backlog_tamer/application/intake_service.py` | Core orchestration service |
 | `src/backlog_tamer/application/confirmation_store.py` | Confirmation persistence with idempotency |
-| `src/backlog_tamer/application/models.py` | `ConfirmationRecord`, `ManualEdit`, `ConfirmationStatus` |
+| `src/backlog_tamer/application/models.py` | `ConfirmationRecord`, `ManualEdit`, `ConfirmationStatus`, `IntakeResult` |
 | `src/backlog_tamer/integrations/telegram/handlers.py` | Shared Telegram message/callback handlers |
 | `src/backlog_tamer/integrations/telegram/bot.py` | `build_application` + polling entry point |
-| `src/backlog_tamer/integrations/notion/writer.py` | Notion API writer |
-| `src/backlog_tamer/integrations/source_reader.py` | `SourceReader`, `FetchedUrl` Grounding, Browserbase + Stagehand extraction |
+| `src/backlog_tamer/integrations/notion/writer.py` | Notion API writer (`create_project`) |
+| `src/backlog_tamer/integrations/source_reader.py` | `SourceReader`, `FetchedUrl`, Browserbase + Stagehand extraction |
 | `src/backlog_tamer/source_urls.py` | `normalize_source_url`, `strip_tracking_params`, `youtube_watch_url` |
-| `scripts/migrate_notion_schema.py` | One-time Notion schema migration |
-| `src/backlog_tamer/config.py` | Settings model (pydantic-settings) |
+| `src/backlog_tamer/config.py` | Settings model (`TriageConfig`, `Settings`) |
+| `src/backlog_tamer/database_urls.py` | `to_sync_database_url`, `uses_external_pooler` |
