@@ -1,20 +1,9 @@
 """Domain types shared by Triage, the application and the integrations."""
 
 import re
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field, HttpUrl, model_validator
-
-LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE = {
-    "article": "article",
-    "paper": "paper",
-    "video": "video",
-    "course": "course",
-    "documentation": "tool",
-    "repository": "repository",
-    "idea": "product",
-    "unknown": "product",
-}
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class SourceLink(BaseModel):
@@ -93,29 +82,6 @@ class ProjectDraft(BaseModel):
     source_url: str | None = None
     topics: list[str] = Field(default_factory=list, max_length=3)
     tasks: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_resource_type(cls, value: Any) -> Any:
-        """Load drafts persisted before project_type replaced resource_type.
-
-        Source-shaped legacy values cannot always recover the exact target.
-        Preserve the two unambiguous classifications and use a stable closest
-        match for the others so pending confirmations remain reviewable.
-        """
-        if not isinstance(value, dict):
-            return value
-
-        migrated = dict(value)
-        legacy_type = migrated.pop("resource_type", None)
-        project_type = migrated.get("project_type", legacy_type)
-        if isinstance(project_type, str):
-            project_type = LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE.get(
-                project_type,
-                project_type,
-            )
-        migrated["project_type"] = project_type
-        return migrated
 
     @property
     def effective_short_name(self) -> str:
