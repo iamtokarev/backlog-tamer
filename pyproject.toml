@@ -32,8 +32,6 @@ packages = ["src/backlog_tamer"]
 [tool.ruff]
 line-length = 88
 target-version = "py312"
-# Local issue files and throwaway experiment scripts.
-extend-exclude = [".scratch"]
 
 [tool.ruff.lint]
 select = [
