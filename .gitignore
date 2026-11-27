@@ -28,3 +28,6 @@ infra/terraform/backend.hcl
 
 # Notion migration snapshots
 notion-projects-snapshot-*.json
+
+# Local specs, issues and experiments (never committed; the repo is public)
+.scratch/

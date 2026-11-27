@@ -14,6 +14,7 @@ from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     NeedsReview,
     Rejected,
+    TriageEngine,
     TriageWorkflow,
     TurnOutcome,
 )
@@ -101,6 +102,14 @@ def _log_corrections(confirmation: ConfirmationRecord) -> None:
     )
 
 
+def _engine_from_settings(settings: Settings, database_url: str) -> TriageEngine:
+    if settings.triage.engine == "decision":
+        from backlog_tamer.agents.decision_triage import DecisionTriage
+
+        return DecisionTriage.from_settings(settings, database_url)
+    return TriageWorkflow.from_settings(settings, database_url)
+
+
 class IntakeService:
     def __init__(
         self,
@@ -109,13 +118,13 @@ class IntakeService:
         store: ConfirmationStore | None = None,
         settings: Settings | None = None,
         notion_writer: NotionWriter | None = None,
-        workflow: TriageWorkflow | None = None,
+        workflow: TriageEngine | None = None,
     ):
         self.settings = settings or get_settings()
         self.database_url = database_url or self.settings.database_url
         self.store = store or ConfirmationStore(self.database_url)
         self.notion_writer = notion_writer
-        self.workflow = workflow or TriageWorkflow.from_settings(
+        self.workflow = workflow or _engine_from_settings(
             self.settings,
             self.database_url,
         )

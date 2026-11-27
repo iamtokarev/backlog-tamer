@@ -15,10 +15,23 @@ class AgentConfig(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
 
+class TriageConfig(BaseSettings):
+    """Which engine drafts an Intake: the ADK agent, or the decision prototype."""
+
+    engine: Literal["agent", "decision"] = "agent"
+    # Pin a dated model: decision probabilities, and so thresholds, move
+    # between versions. v1.3 is only listed as :free on OpenRouter for now.
+    decision_model: str = "perplexity/pplx-decider-v1.3:free"
+    title_model: str = "openai/gpt-6-luna"
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+
 class Settings(BaseSettings):
     openrouter_api_key: SecretStr
     browserbase_api_key: SecretStr
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    triage: TriageConfig = Field(default_factory=TriageConfig)
     telegram: TelegramConfig
 
     database_url: str = "sqlite:///backlog_tamer.db"

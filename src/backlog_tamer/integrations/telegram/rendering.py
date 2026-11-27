@@ -373,6 +373,8 @@ def build_terminal_keyboard(
 
 def _task_count(draft: ProjectDraft) -> str:
     count = len(draft.tasks)
+    if count == 0:
+        return "no tasks"
     return "1 task" if count == 1 else f"{count} tasks"
 
 

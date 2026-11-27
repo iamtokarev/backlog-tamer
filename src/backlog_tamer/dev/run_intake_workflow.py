@@ -10,6 +10,7 @@ from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     NeedsReview,
     Rejected,
+    TriageEngine,
     TriageWorkflow,
     TurnOutcome,
 )
@@ -56,6 +57,12 @@ def parse_args() -> argparse.Namespace:
         help="Send one Revision with this feedback instead of prompting.",
     )
     parser.add_argument(
+        "--engine",
+        choices=("agent", "decision"),
+        default=None,
+        help="Triage engine; defaults to TRIAGE__ENGINE (agent).",
+    )
+    parser.add_argument(
         "--user-id",
         default=USER_ID,
         help="Runner user id for the local session.",
@@ -85,7 +92,7 @@ def render_outcome(outcome: TurnOutcome) -> None:
 
 
 async def decide(
-    workflow: TriageWorkflow,
+    workflow: TriageEngine,
     outcome: NeedsReview,
     args: argparse.Namespace,
 ) -> TurnOutcome | None:
@@ -108,10 +115,16 @@ async def decide(
 
 async def main() -> None:
     args = parse_args()
-    workflow = TriageWorkflow.from_settings(
-        get_settings(),
-        session_service=InMemorySessionService(),
-    )
+    settings = get_settings()
+    if (args.engine or settings.triage.engine) == "decision":
+        from backlog_tamer.agents.decision_triage import DecisionTriage
+
+        workflow = DecisionTriage.from_settings(settings, "sqlite:///:memory:")
+    else:
+        workflow = TriageWorkflow.from_settings(
+            settings,
+            session_service=InMemorySessionService(),
+        )
     outcome = await workflow.start(build_context(args), args.user_id, [])
     render_outcome(outcome)
 

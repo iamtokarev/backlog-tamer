@@ -9,7 +9,7 @@ Approved or Rejected; they hold a Checkpoint between turns without reading it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from google.adk.runners import Runner
@@ -72,6 +72,26 @@ class Rejected:
 
 
 TurnOutcome = NeedsReview | Approved | Rejected
+
+
+class TriageEngine(Protocol):
+    """The five Triage operations IntakeService drives, whatever drafts."""
+
+    async def start(
+        self, context: IncomingContext, user_id: str, known_topics: list[str]
+    ) -> TurnOutcome: ...
+
+    async def revise(
+        self, checkpoint: Checkpoint, feedback: str, kept_fields: dict[str, str]
+    ) -> TurnOutcome: ...
+
+    async def refetch(
+        self, checkpoint: Checkpoint, kept_fields: dict[str, str]
+    ) -> TurnOutcome: ...
+
+    async def approve(self, checkpoint: Checkpoint) -> TurnOutcome: ...
+
+    async def reject(self, checkpoint: Checkpoint) -> TurnOutcome: ...
 
 
 class TriageWorkflow:
