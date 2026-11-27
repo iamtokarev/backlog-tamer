@@ -9,8 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from time import perf_counter
 from typing import Any
 
@@ -171,33 +174,58 @@ class DecisionClient:
             raise RuntimeError(f"Title model {self.title_model} returned no title.")
 
     async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        """POST with retries; the final attempt's error, if any, propagates."""
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-            for attempt in range(MAX_ATTEMPTS):
+            for attempt in range(MAX_ATTEMPTS - 1):
                 start = perf_counter()
-                response = await client.post(
-                    f"{OPENROUTER_API}{path}", json=body, headers=self._headers
-                )
-                if (
-                    response.status_code in RETRY_STATUSES
-                    and attempt < MAX_ATTEMPTS - 1
-                ):
-                    await asyncio.sleep(
-                        float(response.headers.get("Retry-After", 2**attempt))
+                try:
+                    response = await client.post(
+                        f"{OPENROUTER_API}{path}", json=body, headers=self._headers
                     )
+                except (httpx.TimeoutException, httpx.TransportError):
+                    await asyncio.sleep(2**attempt)
                     continue
-                response.raise_for_status()
-                payload = response.json()
-                usage = payload.get("usage") or {}
-                self._on_usage(
-                    Usage(
-                        path=path,
-                        model=body.get("model"),
-                        seconds=perf_counter() - start,
-                        input_tokens=usage.get(
-                            "input_tokens", usage.get("prompt_tokens")
-                        ),
-                        cost=usage.get("cost"),
-                    )
-                )
-                return payload
-        raise RuntimeError("unreachable")
+                if response.status_code in RETRY_STATUSES:
+                    await asyncio.sleep(_retry_delay(response, attempt))
+                    continue
+                return self._read(response, path, body, start)
+            start = perf_counter()
+            response = await client.post(
+                f"{OPENROUTER_API}{path}", json=body, headers=self._headers
+            )
+            return self._read(response, path, body, start)
+
+    def _read(
+        self, response: httpx.Response, path: str, body: dict[str, Any], start: float
+    ) -> dict[str, Any]:
+        response.raise_for_status()
+        payload = response.json()
+        usage = payload.get("usage") or {}
+        self._on_usage(
+            Usage(
+                path=path,
+                model=body.get("model"),
+                seconds=perf_counter() - start,
+                input_tokens=usage.get("input_tokens", usage.get("prompt_tokens")),
+                cost=usage.get("cost"),
+            )
+        )
+        return payload
+
+
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    """Seconds from Retry-After (a number or an HTTP-date), else backoff."""
+    header = (response.headers.get("Retry-After") or "").strip()
+    try:
+        seconds = float(header)
+    except ValueError:
+        pass
+    else:
+        return max(0.0, seconds) if math.isfinite(seconds) else float(2**attempt)
+    try:
+        when = parsedate_to_datetime(header)
+    except (TypeError, ValueError):
+        return float(2**attempt)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - datetime.now(UTC)).total_seconds())

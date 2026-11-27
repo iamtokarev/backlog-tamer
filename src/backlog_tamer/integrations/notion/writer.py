@@ -12,6 +12,7 @@ import httpx
 
 from backlog_tamer.config import Settings
 from backlog_tamer.domain import (
+    MAX_TOPICS,
     Grounding,
     IncomingContext,
     ProjectDraft,
@@ -585,18 +586,19 @@ def _status(value: str) -> dict[str, Any]:
 
 
 def _draft_tags(draft: ProjectDraft) -> list[dict[str, str]]:
-    """Tags carry topics: lowercase, free of the commas Notion splits on, and
-    one per spelling, so "agent-evaluation" and "agent evaluations" stay one tag.
+    """Tags carry topics in the vocabulary's own spelling, free of the commas
+    Notion splits on, and one per spelling, so "agent-evaluation" and
+    "agent evaluations" stay one tag.
     """
     tags: list[str] = []
     seen: set[str] = set()
     for topic in draft.topics:
-        cleaned = " ".join(topic.strip().lower().replace(",", " ").split())
+        cleaned = " ".join(topic.replace(",", " ").split())
         if not cleaned or fold_tag(cleaned) in seen:
             continue
         seen.add(fold_tag(cleaned))
         tags.append(cleaned)
-    return [{"name": tag} for tag in tags[:3]]
+    return [{"name": tag} for tag in tags[:MAX_TOPICS]]
 
 
 class NotionApiError(RuntimeError):

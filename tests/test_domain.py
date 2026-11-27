@@ -39,6 +39,15 @@ def test_with_edits_rejects_a_value_outside_the_label_set():
         _draft().with_edits({"intent": "binge"})
 
 
+def test_with_edits_validates_even_with_no_edits():
+    unchecked = ProjectDraft.model_construct(
+        **{**_draft().model_dump(), "intent": "binge"}
+    )
+
+    with pytest.raises(ValidationError):
+        unchecked.with_edits({})
+
+
 def test_grounding_rows_stored_before_the_new_fields_still_load():
     stored = '{"fetch_status": "success", "site_name": "GitHub"}'
 
