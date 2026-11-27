@@ -7,38 +7,39 @@ description: >-
   validation, an extraction escalation ladder, YouTube/X oEmbed and PDF
   specialization, and a per-invocation client lifecycle for AWS Lambda.
 tags: [integrations, source-reader, browserbase, stagehand, ssrf, grounding]
-timestamp: 2026-11-05T23:00:00Z
+timestamp: 2026-11-06T00:00:00Z
 openwiki:
   roles: [integration, architecture, operations]
   change_kinds: [lifecycle, public-api]
   source_paths:
     - src/backlog_tamer/integrations/source_reader.py
-    - src/backlog_tamer/agents/intake_triage/tools/fetch_url.py
+    - src/backlog_tamer/domain.py
     - src/backlog_tamer/source_urls.py
   symbols:
     - SourceReader
     - SourceReader.read
     - SourceReader.from_api_key
     - FetchedUrl
+    - FetchedUrl.to_grounding
     - _BrowserbaseProvider
-    - make_fetch_url_tool
+    - Grounding
   test_paths:
     - tests/test_source_reader.py
-    - tests/test_fetch_url.py
+    - tests/test_draft_grounding.py
   invariants:
     - Private or non-global IP inputs and redirects never reach the Browserbase provider.
-    - Failed page fetches are never cached as success by the ADK tool; refetch clears saved Grounding.
+    - A failed read returns a Grounding with fetch_status error, never a success; refetch re-reads.
     - One Browserbase client and browser session per read; clients are closed even on cancel/error/timeout.
     - Source facts are never inferred from a URL alone; extraction returns structured failure when content is unavailable.
   validation_commands:
-    - uv run pytest tests/test_source_reader.py tests/test_fetch_url.py -q
+    - uv run --locked pytest tests/test_source_reader.py tests/test_draft_grounding.py -q
 ---
 
 # Source Reader (Browserbase + Stagehand)
 
-The agent needs grounded evidence about a URL before it drafts a project — a title, key points, a canonical identity — but it must not reach private network addresses, and many sources are JavaScript-rendered or behind soft paywalls. `SourceReader` (`src/backlog_tamer/integrations/source_reader.py`) is the component that turns one public URL into a compact `FetchedUrl` Grounding result, or a structured failure. It is the single place that owns remote network egress for source reading.
+Triage needs grounded evidence about a URL before it classifies a project — a title, key points, a canonical identity — but it must not reach private network addresses, and many sources are JavaScript-rendered or behind soft paywalls. `SourceReader` (`src/backlog_tamer/integrations/source_reader.py`) is the component that turns one public URL into a compact `FetchedUrl` Grounding result, or a structured failure. It is the single place that owns remote network egress for source reading.
 
-`BROWSERBASE_API_KEY` is a required setting (`Settings.browserbase_api_key`, validated non-blank in `config.py`). The agent is wired to it in `agent.py`: `SourceReader.from_api_key(settings.browserbase_api_key.get_secret_value())` is passed into `make_fetch_url_tool`, which adapts it to ADK's tool interface. Source reading is surfaced to the model as a tool named `fetch_url`; see [Intake Workflow](../workflows/intake-flow.md) for how the agent calls it and how Grounding flows into the draft.
+`BROWSERBASE_API_KEY` is a required setting (`Settings.browserbase_api_key`, validated non-blank in `config.py`). `IntakeService` constructs `SourceReader.from_api_key(settings.browserbase_api_key.get_secret_value())` and calls `reader.read` directly in `start_intake`/`refetch` — there is no ADK tool adapter. `FetchedUrl.to_grounding()` converts the result into the shared `Grounding` type that flows into the draft. See [Intake Workflow](../workflows/intake-flow.md).
 
 ## Why Browserbase
 
@@ -53,34 +54,32 @@ Browserbase owns remote DNS and egress. Local validation still rejects private i
 
 `SourceReader.read` runs under a 60-second timeout (`READ_TIMEOUT_SECONDS`) and dispatches to `_read`, which selects an extraction path by URL shape and content type. The ladder, from cheapest to most expensive:
 
-<!-- openwiki: mermaid parse failed and this diagram was converted to a text fence so it does not break rendering. Fix the diagram source and restore the mermaid fence. Parser error: Heuristic: an unescaped angle bracket inside a label breaks rendering; rephrase the label. -->
-<!-- openwiki: mermaid parse failed and this diagram was converted to a text fence so it does not break rendering. Fix the diagram source and restore the mermaid fence. Parser error: Heuristic: an unescaped angle bracket inside a label breaks rendering; rephrase the label. -->
-```text
+```mermaid
 flowchart TD
-    IN["read(url)"] --> VALID["_validate_public_url (local DNS)"]
-    VALID -->|private/non-global| ERR["FetchedUrl(error)"]
+    IN["read url"] --> VALID["_validate_public_url local DNS"]
+    VALID -->|private or non-global| ERR["FetchedUrl error"]
     VALID --> OE{"YouTube or X status?"}
-    OE -->|yes| OEMBED["_oembed: Fetch raw, json.loads"]
-    OE -->|no| REQ["_request: Fetch raw, follow redirects (max 5)"]
-    REQ -->|HTTP at least 400| RECOV{"403, 429, or 5xx?"}
-    RECOV -->|yes| RENDER["_render: Stagehand browser"]
+    OE -->|yes| OEMBED["_oembed Fetch raw json.loads"]
+    OE -->|no| REQ["_request Fetch raw follow redirects max 5"]
+    REQ -->|HTTP at least 400| RECOV{"403 429 or 5xx?"}
+    RECOV -->|yes| RENDER["_render Stagehand browser"]
     RECOV -->|no| ERR
     REQ -->|200| CT{"content-type?"}
-    CT -->|pdf| PDF["_pdf: pypdf, first 5 pages"]
-    CT -->|html| DYN{"_browser_required? (Kaggle Learn, WebGPU samples)"}
+    CT -->|pdf| PDF["_pdf pypdf first 5 pages"]
+    CT -->|html| DYN{"_browser_required Kaggle Learn WebGPU samples"}
     DYN -->|yes| RENDER
-    DYN -->|no| JSON["Fetch JSON with _PageGrounding schema"]
-    JSON -->|insufficient/partial| RENDER
-    JSON -->|complete| HTML["_html -> FetchedUrl"]
-    CT -->|text/json/xml| TEXT["text lines -> FetchedUrl"]
+    DYN -->|no| JSON["Fetch JSON _PageGrounding schema"]
+    JSON -->|insufficient or partial| RENDER
+    JSON -->|complete| HTML["_html to FetchedUrl"]
+    CT -->|text json xml| TEXT["text lines to FetchedUrl"]
     RENDER -->|rendered complete| HTML
     RENDER -->|incomplete| ERR
-    OEMBED -->|parsed| OUT["FetchedUrl(success)"]
+    OEMBED -->|parsed| OUT["FetchedUrl success"]
     OEMBED -->|missing| REQ
     HTML --> OUT
     PDF --> OUT
     TEXT --> OUT
-    OUT --> YT["youtube_watch_url pinned as canonical (if YouTube)"]
+    OUT --> YT["youtube_watch_url pinned as canonical if YouTube"]
 ```
 
 *Extraction path selection in `SourceReader._read`. A source escalates to a hosted browser only when cheaper Fetch-based extraction is insufficient, known-dynamic, or recovering from a target HTTP error.*
@@ -115,7 +114,7 @@ Browser renders themselves can fail: if the rendered `_PageGrounding` is still `
 
 ## FetchedUrl
 
-The Grounding result. Defined in `source_reader.py`. Stored in ADK session state under `fetched_context` and summarized into `DraftGrounding` for the review card and Notion page body — see [Data Model](../domain/data-model.md).
+The Grounding result. Defined in `source_reader.py`. `FetchedUrl.to_grounding()` converts it into the shared `Grounding` type (from `domain.py`) that flows into the `ProjectDraft` and the Notion page body — see [Data Model](../domain/data-model.md).
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -130,17 +129,9 @@ The Grounding result. Defined in `source_reader.py`. Stored in ADK session state
 | `notes` | `list[str]` | e.g. `"Only the first 5 PDF pages were parsed."` |
 | `error` | `str \| None` | Structured failure reason |
 
+`to_grounding()` maps a success into a `Grounding` (capping key points at `MAX_GROUNDING_KEY_POINTS = 4`, preferring `canonical_url` over `final_url`) and an error into a `Grounding(fetch_status="error", fetch_error=self.error)`. The shared `Grounding` type replaces the earlier `DraftGrounding` from the agent-era `schemas.py`.
+
 On error, the `error` string is deliberately generic for SDK connection failures: the SDK may embed credential-bearing connection URLs in exception messages, so those are collapsed to `Source reading failed (<ExceptionType>).`. Provider HTTP errors (`APIStatusError`) surface the status code; provider account errors (401/402/403/429) fail directly without a browser fallback.
-
-## The ADK `fetch_url` Tool Adapter
-
-`src/backlog_tamer/agents/intake_triage/tools/fetch_url.py` is now a thin adapter. `make_fetch_url_tool(reader)` returns an async `fetch_url(url, tool_context)` function that:
-
-1. Normalizes the URL with `normalize_source_url` to derive a stable cache key.
-2. Reuses a previously-saved **success** result from `tool_context.state[FETCHED_CONTEXT_STATE_KEY]` without calling the provider — so the same URL is not re-fetched within one Intake. Failed results are saved too, but a failure is **not** reused (the cache check requires `status == "success"`); the next call re-reads.
-3. On a miss, calls `reader.read(url)`, persists the payload back into session state (reading state again after the await so concurrent reads both persist), and returns the JSON payload.
-
-Clearing `FETCHED_CONTEXT_STATE_KEY` is how a **Refetch** works: `TriageWorkflow.refetch` resumes the paused turn with `state_delta={FETCHED_CONTEXT_STATE_KEY: {}}`, so the saved failure is discarded and the agent re-reads the source. See [Intake Workflow](../workflows/intake-flow.md#refetch-after-failed-page-fetch).
 
 ## Per-Invocation Client Lifecycle
 
@@ -156,7 +147,7 @@ Clearing `FETCHED_CONTEXT_STATE_KEY` is how a **Refetch** works: `TriageWorkflow
 
 ## Dependencies and Lockfile
 
-`pyproject.toml` declares `browserbase>=1.24,<2`, `stagehand>=4.4,<5`, and `pypdf>=6.16.1` (the `beautifulsoup4` dependency is gone). Stagehand v4 conflicts with ADK's `websockets` pin, so `[tool.uv]` overrides `websockets>=16.1.1,<17` to keep the shared version within GenAI's `<17` range. This override has been validated for the HTTP-backed `run_async` application path that Intake actually uses, via the locked suite (`uv lock --check` / `make test`) and live source-backed Triage turns through the dev runner; it is not an unconditional compatibility guarantee for other ADK features (e.g. Gemini Live), which may need separate verification when changed. When changing those dependencies, re-run that focused validation.
+`pyproject.toml` declares `browserbase>=1.24,<2`, `stagehand>=4.4,<5`, and `pypdf>=6.16.1` (the `beautifulsoup4` and `google-adk` dependencies are gone). The `websockets` override that reconciled Stagehand v4 with ADK's version pin is gone with ADK. When changing `browserbase`, `stagehand`, or `pypdf`, re-run `uv lock --check` and the focused source-reader tests.
 
 ## When to Consult This Page
 
@@ -185,9 +176,9 @@ To add a new specialized extraction path (e.g. a new oEmbed provider):
 
 | File | Purpose |
 |------|---------|
-| `src/backlog_tamer/integrations/source_reader.py` | `SourceReader`, `_BrowserbaseProvider`, `FetchedUrl`, `_PageGrounding`, escalation ladder, SSRF validation |
-| `src/backlog_tamer/agents/intake_triage/tools/fetch_url.py` | `make_fetch_url_tool` — ADK tool adapter, success-only caching, failure retry |
+| `src/backlog_tamer/integrations/source_reader.py` | `SourceReader`, `_BrowserbaseProvider`, `FetchedUrl` (`to_grounding`), `_PageGrounding`, escalation ladder, SSRF validation |
+| `src/backlog_tamer/domain.py` | `Grounding` — the shared type `FetchedUrl.to_grounding()` returns |
 | `src/backlog_tamer/source_urls.py` | `normalize_source_url`, `strip_tracking_params`, `youtube_watch_url` |
-| `src/backlog_tamer/agents/intake_triage/agent.py` | Wires `SourceReader.from_api_key` into the `fetch_url` tool |
+| `src/backlog_tamer/application/intake_service.py` | Wires `SourceReader.from_api_key` and calls `reader.read` in `start_intake`/`refetch` |
 | `tests/test_source_reader.py` | Interface, escalation, SSRF, redirect, oEmbed, PDF, bounds, cleanup, per-loop lifecycle |
-| `tests/test_fetch_url.py` | ADK tool caching, success reuse, failure retry, parallel reads |
+| `tests/test_draft_grounding.py` | `FetchedUrl.to_grounding` mapping (success, error, key-point cap, canonical preference) |

@@ -1,70 +1,76 @@
 ---
 type: Quickstart
 title: Backlog Tamer Quickstart
-description: Telegram-first personal learning intake system that turns messy inputs into structured Notion backlog items via an AI triage agent with human-in-the-loop approval.
+description: Telegram-first personal learning intake system that turns messy inputs into structured Notion backlog items via decision-model Triage with human-in-the-loop approval.
 tags: [entrypoint, overview]
-timestamp: 2025-01-20T00:00:00Z
+timestamp: 2026-11-06T00:00:00Z
 ---
 
 # Backlog Tamer
 
-Backlog Tamer is a Telegram bot that turns messy learning and project inputs — links, notes, ideas — into structured Notion backlog items. An AI agent drafts a project/task proposal, a human approves, rejects, or revises it via Telegram inline keyboards, and the approved result is written to Notion.
+Backlog Tamer is a Telegram bot that turns messy learning and project inputs — links, notes, ideas — into structured Notion backlog items. Decision models draft a `ProjectDraft`, a human approves, rejects, quick-edits, or revises it via Telegram inline keyboards, and the approved result is written to Notion.
 
-The product sits between curiosity and execution: Telegram is the low-friction inbox, the agent is the triage layer, and Notion is the system of record.
+The product sits between curiosity and execution: Telegram is the low-friction inbox, [Triage](workflows/intake-flow.md) is the decision layer, and Notion is the system of record.
 
 ## Core Loop
 
 1. **Capture** — user sends a link, note, or idea to the Telegram bot.
-2. **Interpret** — the agent fetches URLs when useful, classifies the input, and drafts a `ProjectDraft` with grounding metadata.
-3. **Propose** — the bot replies with the structured draft and inline-keyboard buttons (Approve / Reject / Revise / quick-edit pickers for priority, intent, project type).
-4. **Confirm** — user taps a button, adjusts fields with quick-edit pickers, or sends revision feedback.
-5. **Commit** — on approval, the draft is written to Notion as a project page with task sub-pages. Duplicate URLs are detected and offered for merge. Failed saves can be retried.
-6. **Reuse** — the user can undo a commit (archives Notion pages) or add tasks to an existing duplicate project, then reviews and acts from a cleaner Notion backlog.
+2. **Read** — the [Source Reader](integrations/source-reader.md) fetches the first link through Browserbase into a `Grounding` (title, key points, canonical URL).
+3. **Triage** — `Triage.classify` asks a decision model typed questions (type, then intent/tags/priority with the type known) and one small LLM call writes the title, in parallel. No summary is written and no tasks are proposed.
+4. **Propose** — the bot replies with the structured draft and inline-keyboard buttons (Approve / Reject / Revise / quick-edit pickers for priority, intent, project type).
+5. **Confirm** — user taps a button, adjusts fields with quick-edit pickers, or sends revision feedback. A revision routes the feedback to the fields it is about and re-decides only those.
+6. **Commit** — on approval, the draft is written to Notion as a project page. Duplicate URLs are detected and offered for merge. Failed saves can be retried.
+7. **Reuse** — the user can undo a commit (archives the Notion page) and then reviews and acts from a cleaner Notion backlog.
 
 ## Tech Stack
 
-- **Python 3.12+** with `uv` for dependency management
-- **Google ADK** (≥2.4.0) — agent workflow with interrupts for human-in-the-loop
-- **LiteLLM + OpenRouter** — LLM backend for the drafting agent, wired through ADK's `LiteLlm` adapter (default model: `openai/gpt-6-luna`)
-- **Browserbase + Stagehand** — source reading via managed Fetch API and hosted browser rendering; the `fetch_url` tool adapts a `SourceReader` into ADK (see [Source Reader](integrations/source-reader.md))
+- **Python 3.12+** with `uv` for dependency management, orchestrated by `mise`
+- **Decision models via OpenRouter** — `Triage` asks a decision model typed questions (`POST /api/alpha/decisions`) and one title LLM call (`/v1/chat/completions`); no LLM drafting agent, no ADK, no engine switch (see [ADR 0001](https://github.com/iamtokarev/backlog-tamer/blob/main/docs/adr/0001-triage-by-decision-models.md))
+- **Browserbase + Stagehand** — source reading via managed Fetch API and hosted browser rendering; the `SourceReader` is called directly by `IntakeService` (see [Source Reader](integrations/source-reader.md))
 - **python-telegram-bot** (v22) — Telegram polling, webhook, and Lambda handlers
-- **Notion API** — writes project + task pages via `httpx`
-- **SQLAlchemy** (async + sync) — durable confirmation state (SQLite locally, Postgres/Supabase deployed)
-- **LangSmith** — optional tracing
+- **Notion API** — writes project pages via `httpx` (no task pages; drafts carry no tasks)
+- **SQLAlchemy** (sync) — durable confirmation state (SQLite locally, Postgres/Supabase deployed)
 - **Terraform + AWS Lambda** — production deployment (SQS-queued webhook → worker pattern)
 
 ## Quick Commands
 
 ```sh
-make run                                              # Run the polling bot locally
-make webhook-dev PUBLIC_URL=https://your-ngrok-url    # Run local webhook server
-make test                                             # uv run pytest -v
-make lint                                             # uv run ruff check
-make format-check                                     # CI enforces this
+mise install && mise run setup     # Install locked dependencies
+cp .env.example .env               # fill in keys
+mise run bot                       # Run the polling bot locally
+mise run webhook -- --public-url https://your-ngrok-url   # Local webhook server
+mise run check                     # format-check + lint + test (same as CI)
+mise run test                      # uv run --locked pytest -q
+mise run eval                      # Measure Triage on the golden set (see evals/README.md)
 ```
+
+`mise tasks` lists everything. Commands map to `mise.toml`; there is no `Makefile`.
 
 ## Configuration
 
 Copy `.env.example` to `.env` and fill in the required values. Settings use `pydantic-settings` with `__` as the nested delimiter (e.g. `TELEGRAM__BOT_TOKEN` maps to `Settings.telegram.bot_token`). See `src/backlog_tamer/config.py` for the full settings model.
 
-Required env vars: `OPENROUTER_API_KEY`, `BROWSERBASE_API_KEY`, `TELEGRAM__BOT_TOKEN`, `TELEGRAM__ALLOWED_USER_ID`, `NOTION_TOKEN`, `NOTION_PROJECTS_DATABASE_ID`, `NOTION_TASKS_DATABASE_ID`, `DATABASE_URL`. Direct OpenAI credentials are no longer used — an OpenRouter key is required and validated non-blank by `Settings`. `BROWSERBASE_API_KEY` is likewise required and validated non-blank; source reading delegates all remote DNS and egress to Browserbase.
+Required env vars: `OPENROUTER_API_KEY`, `BROWSERBASE_API_KEY`, `TELEGRAM__BOT_TOKEN`, `TELEGRAM__ALLOWED_USER_ID`, `NOTION_TOKEN`, `NOTION_PROJECTS_DATABASE_ID`, `DATABASE_URL`.
 
-Optional: `AGENT__MODEL` (default `openai/gpt-6-luna`; an OpenRouter model slug including its publisher, e.g. `anthropic/claude-sonnet-5`), `AGENT__REASONING_EFFORT` (default `medium`; must be `none`, `low`, `medium`, or `high`). The adapter sends native `reasoning.effort` and `provider.require_parameters=true` to OpenRouter, which preserves the model's reasoning and structured-output capabilities rather than relying on LiteLLM's parameter whitelist.
+Optional: `TRIAGE__DECISION_MODEL` (default `perplexity/pplx-decider-v1.3:free`; an OpenRouter decision-model slug), `TRIAGE__TITLE_MODEL` (default `openai/gpt-6-luna`; an OpenRouter slug for the title LLM call), `TELEGRAM__WEBHOOK_SECRET`, `NOTION_API_VERSION` (default `2022-06-28`).
+
+> The free decision model (`perplexity/pplx-decider-v1.3:free`) is temporary and ends around mid-December 2026. The deploy healthcheck probes both models, so a dead slug fails the deploy; switching is one setting (`TRIAGE__DECISION_MODEL`), and `mise run eval -- --model <slug>` measures a replacement first.
 
 ## Model Validation
 
-Model wiring is regression-pinned by focused tests, not just by the deployment healthcheck. `tests/test_config.py` covers settings loading: `OPENROUTER_API_KEY` and `BROWSERBASE_API_KEY` are both required (blank/whitespace fails even if a legacy OpenAI key is present), environment variables override `.env`, and the defaults resolve to `openai/gpt-6-luna` at `medium` reasoning. `tests/test_agent_model.py` exercises the configured adapter through a mocked HTTP transport with a dummy key: it asserts the destination is `https://openrouter.ai/api/v1/chat/completions`, the request carries `Bearer` auth, `model` is `openai/gpt-6-luna`, `reasoning` is `{"effort": "medium"}`, `provider` is `{"require_parameters": true}`, tool declarations (`fetch_url`) and the structured `ProjectDraft` JSON schema are forwarded, tool-call IDs and tool-result continuation are preserved, a different publisher slug routes through the same endpoint, and a `401` propagates as `AuthenticationError` without a direct-provider fallback. Beyond these mocked checks, `docs/specs/openrouter-model-migration.md` records an authenticated GPT-6 Luna smoke check through the standalone runner: a public-URL intake that exercised `fetch_url`, a structured draft, and a revision returning to review — all using medium reasoning, in-memory sessions, and tracing disabled, with no Telegram or Notion writes.
+`tests/test_config.py` covers settings loading: `OPENROUTER_API_KEY` and `BROWSERBASE_API_KEY` are both required (blank/whitespace fails), environment variables override `.env`, and the defaults resolve to `perplexity/pplx-decider-v1.3:free` / `openai/gpt-6-luna`. `tests/test_decision_client.py` exercises the OpenRouter transport with a mocked `httpx` client: it asserts the decisions endpoint is `https://openrouter.ai/api/alpha/decisions`, the title call targets `/v1/chat/completions` with `reasoning: {"effort": "none"}` and `provider: {"require_parameters": True}`, `Bearer` auth, retry behavior on 429/502/503/524/529, and usage logging. `tests/test_triage.py` drives `Triage.classify`/`revise` through a `FakeClient` that returns scripted answers and asserts the right questions are asked in the right order, routing only re-decides routed fields, and a type change re-asks intent.
+
+`mise run eval` measures the production `Triage` on the golden set exported from Notion (see [evals/README.md](https://github.com/iamtokarev/backlog-tamer/blob/main/evals/README.md)). Run it before changing a model, a criterion, or a threshold.
 
 ## Documentation Sections
 
-- [Architecture Overview](architecture/overview.md) — three-layer design, how the agent, application, and integrations connect
-- [Intake Workflow](workflows/intake-flow.md) — end-to-end flow from Telegram message to Notion commit, including the ADK workflow graph and confirmation lifecycle
-- [Data Model](domain/data-model.md) — `ProjectDraft`, `IncomingContext`, `ConfirmationRecord`, database tables, and Notion payload structures
+- [Architecture Overview](architecture/overview.md) — three-layer design: Triage, application orchestration, and integrations
+- [Intake Workflow](workflows/intake-flow.md) — end-to-end flow from Telegram message to Notion commit, including the confirmation lifecycle
+- [Data Model](domain/data-model.md) — `ProjectDraft`, `IncomingContext`, `Grounding`, `ConfirmationRecord`, database tables, and Notion payload structures
 - [Telegram & Notion Integrations](integrations/telegram-and-notion.md) — three Telegram entry points, handlers, webhook validation, Notion writer
-- [Source Reader](integrations/source-reader.md) — Browserbase + Stagehand source reading, the extraction escalation ladder, SSRF validation, and the `fetch_url` tool adapter
-- [Deployment & Operations](operations/deployment.md) — local dev, Docker, Terraform, CI/CD, secrets
+- [Source Reader](integrations/source-reader.md) — Browserbase + Stagehand source reading, the extraction escalation ladder, SSRF validation, and `FetchedUrl.to_grounding`
+- [Deployment & Operations](operations/deployment.md) — local dev, Docker, Terraform, CI/CD, secrets, mise tasks
 
 ## Backlog
 
-- **OpenRouter model wiring** (`src/backlog_tamer/agents/intake_triage/agent.py::_get_model`) — the `LiteLlm` adapter adds the `openrouter/` transport prefix, pins `api_base` to `https://openrouter.ai/api/v1`, and passes `reasoning.effort` + `provider.require_parameters=true` via `extra_body` to bypass LiteLLM's model-metadata parameter whitelist. Covered at the config/endpoint level in [Architecture Overview](architecture/overview.md) and [Deployment & Operations](operations/deployment.md); the request-shape contract is pinned by `tests/test_agent_model.py` (OpenRouter URL, bearer key, model slug, reasoning/provider body, publisher override, auth-error propagation). The adapter internals themselves are not otherwise documented.
-- **Secrets Manager rollout runbook** — adding `OPENROUTER_API_KEY` and `BROWSERBASE_API_KEY` to the runtime JSON secret, converting any existing `AGENT__MODEL` to its publisher-qualified OpenRouter slug, and removing obsolete OpenAI secret entries after the rollback window closes. Summarized in [Deployment & Operations](operations/deployment.md); the step-by-step rotation sequence is not yet a standalone runbook.
+- **Evals pipeline** (`evals/`) — the golden-set export, classify/revise/titles stages, and the disk-caching `DecisionClient` are documented in `evals/README.md` but not yet as a wiki page. Source anchor: `evals/{run,golden,metrics,cases,caching}.py`. Promote when a model swap or threshold change is in flight.
