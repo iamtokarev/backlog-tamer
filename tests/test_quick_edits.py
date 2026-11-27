@@ -119,7 +119,6 @@ def _build_confirmation() -> ConfirmationRecord:
             intent="explore",
             priority="Medium",
             source_url="https://example.com",
-            tasks=["Read"],
         ),
         created_at=now,
         updated_at=now,

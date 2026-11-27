@@ -37,7 +37,6 @@ from backlog_tamer.integrations.notion.writer import (
     PROJECT_SUMMARY_PROPERTY,
     PROJECT_TAGS_PROPERTY,
     PROJECT_TYPE_PROPERTY,
-    TASK_SOURCE_PROPERTY,
 )
 from backlog_tamer.source_urls import strip_tracking_params
 
@@ -163,7 +162,6 @@ def _is_empty(prop: dict[str, Any] | None) -> bool:
 async def ensure_columns(
     client: httpx.AsyncClient,
     projects_db: str,
-    tasks_db: str,
     apply: bool,
 ) -> None:
     plans = [
@@ -180,7 +178,6 @@ async def ensure_columns(
                 PROJECT_CAPTURED_PROPERTY: {"date": {}},
             },
         ),
-        (tasks_db, {TASK_SOURCE_PROPERTY: {"url": {}}}),
     ]
 
     for database_id, wanted in plans:
@@ -297,7 +294,6 @@ async def main() -> int:
         await ensure_columns(
             client,
             settings.notion_projects_database_id,
-            settings.notion_tasks_database_id,
             args.apply,
         )
 

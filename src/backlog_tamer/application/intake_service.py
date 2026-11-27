@@ -271,7 +271,7 @@ class IntakeService:
             )
 
         try:
-            result = await writer.create_project_with_tasks(
+            result = await writer.create_project(
                 confirmation.draft_proposal,
                 incoming_context=confirmation.incoming_context,
                 grounding=confirmation.grounding,
@@ -294,7 +294,6 @@ class IntakeService:
             confirmation_id=confirmation_id,
             notion_project_id=result.project_id,
             notion_project_url=result.project_url,
-            notion_task_ids=result.task_ids,
         )
         return IntakeResult(
             status=ConfirmationStatus.COMMITTED.value,
@@ -305,7 +304,7 @@ class IntakeService:
         )
 
     async def undo_commit(self, confirmation_id: str) -> IntakeResult:
-        """Archive the pages this commit created and release the record."""
+        """Archive the page this commit created and release the record."""
         confirmation = self.store.get(confirmation_id)
         if confirmation is None:
             raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
@@ -318,48 +317,13 @@ class IntakeService:
             )
 
         writer = self.notion_writer or NotionWriter.from_settings(self.settings)
-        page_ids = [
-            page_id
-            for page_id in [
-                confirmation.notion_project_id,
-                *confirmation.notion_task_ids,
-            ]
-            if page_id
-        ]
-        await writer.archive_pages(page_ids)
+        if confirmation.notion_project_id:
+            await writer.archive_pages([confirmation.notion_project_id])
         self.store.mark_undone(confirmation_id)
         return IntakeResult(
             status=ConfirmationStatus.UNDONE.value,
             confirmation_id=confirmation_id,
             draft_proposal=confirmation.draft_proposal,
-        )
-
-    async def add_to_existing_project(self, confirmation_id: str) -> IntakeResult:
-        """Attach this draft's tasks to the project the URL already has."""
-        confirmation = self.store.get(confirmation_id)
-        if confirmation is None:
-            raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
-        if confirmation.notion_project_id is None:
-            raise ValueError(f"Confirmation {confirmation_id} has no existing project.")
-
-        writer = self.notion_writer or NotionWriter.from_settings(self.settings)
-        task_ids = await writer.add_tasks_to_project(
-            project_id=confirmation.notion_project_id,
-            draft=confirmation.draft_proposal,
-            grounding=confirmation.grounding,
-        )
-        self.store.mark_committed(
-            confirmation_id=confirmation_id,
-            notion_project_id=confirmation.notion_project_id,
-            notion_project_url=confirmation.notion_project_url or "",
-            notion_task_ids=task_ids,
-        )
-        return IntakeResult(
-            status=ConfirmationStatus.COMMITTED.value,
-            confirmation_id=confirmation_id,
-            draft_proposal=confirmation.draft_proposal,
-            grounding=confirmation.grounding,
-            notion_project_url=confirmation.notion_project_url,
         )
 
     async def _find_duplicate(self, writer, confirmation: ConfirmationRecord):

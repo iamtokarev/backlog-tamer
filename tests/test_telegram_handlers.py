@@ -54,7 +54,6 @@ def _draft(**overrides) -> ProjectDraft:
         "intent": "learn",
         "priority": "High",
         "source_url": SOURCE_URL,
-        "tasks": ["Read: LangGraph"],
     }
     payload.update(overrides)
     return ProjectDraft(**payload)
@@ -242,7 +241,7 @@ def test_revision_feedback_redrafts_and_names_what_changed(tmp_path: Path):
     chat = Chat(
         tmp_path,
         _draft(),
-        _draft(priority="Low", tasks=["Read", "Build"]),
+        _draft(priority="Low"),
     )
     chat.send_link()
     card = chat.last
@@ -254,16 +253,14 @@ def test_revision_feedback_redrafts_and_names_what_changed(tmp_path: Path):
     assert prompt.text.startswith("✏️ What should I change about <b>LangGraph")
     assert isinstance(prompt.reply_markup, ForceReply)
 
-    chat.send("not urgent, and add a build task")
+    chat.send("not urgent")
 
     revised = chat.last
     assert revised.shown[0] == "✍️ Revising the draft…"
-    assert revised.text.startswith(
-        "✏️ <i>Changed: priority High → Low · tasks 1 → 2</i>"
-    )
+    assert revised.text.startswith("✏️ <i>Changed: priority High → Low</i>")
     assert "🔻 Low ▸" in revised.buttons
     assert chat.triage.operations == ["classify", "revise"]
-    assert chat.triage.calls[-1].args["feedback"] == "not urgent, and add a build task"
+    assert chat.triage.calls[-1].args["feedback"] == "not urgent"
 
 
 def test_a_revision_retires_the_card_it_started_from(tmp_path: Path):
@@ -410,7 +407,7 @@ def test_undo_archives_what_the_commit_created(tmp_path: Path):
     assert card.shown[-2] == "↩️ Removing it from Notion…"
     assert card.text.startswith("↩️ <b>Removed from Notion</b>")
     assert card.buttons == []
-    assert chat.writer.archived == ["project-id", "task-id"]
+    assert chat.writer.archived == ["project-id"]
 
 
 def test_reject_closes_the_review_without_writing(tmp_path: Path):
@@ -442,7 +439,7 @@ def test_a_failed_save_can_be_retried(tmp_path: Path):
     assert chat.triage.operations == ["classify"]
 
 
-def test_a_duplicate_link_can_add_its_task_to_the_existing_project(tmp_path: Path):
+def test_a_duplicate_link_only_offers_the_existing_project(tmp_path: Path):
     writer = FakeNotionWriter()
     writer.existing_project = ExistingProject(
         page_id="existing-id",
@@ -456,13 +453,7 @@ def test_a_duplicate_link_can_add_its_task_to_the_existing_project(tmp_path: Pat
 
     assert card.text.startswith("🔁 <b>Already in your backlog</b>")
     assert "since 01 Sep 2026" in card.text
-    assert card.buttons == ["↗️ Open existing", "＋ Add task there"]
-
-    chat.press(card, "Add task there")
-
-    assert card.shown[-2] == "＋ Adding the task to the existing project…"
-    assert card.text.startswith("✅ <b>Saved to Notion</b>")
-    assert writer.added_task_project_ids == ["existing-id"]
+    assert card.buttons == ["↗️ Open existing"]
     assert writer.calls == []
 
 

@@ -19,7 +19,6 @@ def _draft(**overrides) -> ProjectDraft:
         "intent": "build",
         "priority": "High",
         "source_url": URL,
-        "tasks": ["Explore"],
     }
     payload.update(overrides)
     return ProjectDraft(**payload)

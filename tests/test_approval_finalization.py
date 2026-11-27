@@ -31,6 +31,7 @@ def test_finalize_approval_commits_project_and_is_idempotent(tmp_path: Path):
     assert first.notion_project_url == "https://notion.so/project-id"
     assert second.notion_project_url == "https://notion.so/project-id"
     assert len(writer.calls) == 1
+    assert writer.pages_created == 1
 
     stored = store.get(record.confirmation_id)
     assert stored is not None
@@ -127,7 +128,6 @@ def _build_confirmation() -> ConfirmationRecord:
             intent="explore",
             priority="Medium",
             source_url="https://example.com",
-            tasks=["Review example"],
         ),
         created_at=now,
         updated_at=now,
@@ -161,30 +161,7 @@ def test_duplicate_source_is_reported_instead_of_creating_a_second_project(
     assert stored.notion_project_id == "existing-id"
 
 
-def test_a_duplicate_can_have_its_tasks_added_to_the_existing_project(tmp_path: Path):
-    store = _build_store(tmp_path)
-    record = _build_confirmation()
-    store.create_pending(record)
-    writer = FakeNotionWriter()
-    writer.existing_project = ExistingProject(
-        page_id="existing-id",
-        page_url="https://notion.so/existing-id",
-    )
-    service = _build_service(store, writer)
-
-    asyncio.run(service.finalize_approval(record.confirmation_id))
-    result = asyncio.run(service.add_to_existing_project(record.confirmation_id))
-
-    assert result.status == ConfirmationStatus.COMMITTED.value
-    assert writer.added_task_project_ids == ["existing-id"]
-    assert writer.calls == []
-
-    stored = store.get(record.confirmation_id)
-    assert stored is not None
-    assert stored.notion_task_ids == ["new-task-id"]
-
-
-def test_undo_archives_every_page_the_commit_created(tmp_path: Path):
+def test_undo_archives_the_one_page_the_commit_created(tmp_path: Path):
     store = _build_store(tmp_path)
     record = _build_confirmation()
     store.create_pending(record)
@@ -195,13 +172,12 @@ def test_undo_archives_every_page_the_commit_created(tmp_path: Path):
     result = asyncio.run(service.undo_commit(record.confirmation_id))
 
     assert result.status == ConfirmationStatus.UNDONE.value
-    assert writer.archived == ["project-id", "task-id"]
+    assert writer.archived == ["project-id"]
 
     stored = store.get(record.confirmation_id)
     assert stored is not None
     assert stored.status == ConfirmationStatus.UNDONE
     assert stored.notion_project_url is None
-    assert stored.notion_task_ids == []
 
 
 def test_undo_is_a_no_op_when_nothing_was_committed(tmp_path: Path):

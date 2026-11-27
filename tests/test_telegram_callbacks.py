@@ -39,10 +39,6 @@ WIRE_FORMAT = [
     ),
     (ConfirmationAction(Action.RETRY, CONFIRMATION_ID), f"retry:{CONFIRMATION_ID}"),
     (ConfirmationAction(Action.UNDO, CONFIRMATION_ID), f"undo:{CONFIRMATION_ID}"),
-    (
-        ConfirmationAction(Action.ADD_TASK, CONFIRMATION_ID),
-        f"addtask:{CONFIRMATION_ID}",
-    ),
     (ConfirmationAction(Action.BACK, CONFIRMATION_ID), f"back:{CONFIRMATION_ID}"),
     (OpenPicker("priority", CONFIRMATION_ID), f"edit:p:{CONFIRMATION_ID}"),
     (OpenPicker("intent", CONFIRMATION_ID), f"edit:i:{CONFIRMATION_ID}"),
@@ -119,7 +115,6 @@ def test_every_button_the_bot_builds_fits_telegram_and_decodes():
         intent="explore",
         priority="Medium",
         source_url="https://example.com",
-        tasks=["Read"],
     )
     keyboards = [
         build_review_keyboard(draft, confirmation_id, Grounding(fetch_status="error")),

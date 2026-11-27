@@ -57,7 +57,6 @@ UNKNOWN_CONFIRMATION_REPLY = (
 REVISING_MESSAGE = "✍️ Revising the draft…"
 SAVING_MESSAGE = "⏳ Saving to Notion…"
 UNDOING_MESSAGE = "↩️ Removing it from Notion…"
-ADDING_TASK_MESSAGE = "＋ Adding the task to the existing project…"
 REFETCHING_MESSAGE = "🔎 Opening the page again…"
 SUPERSEDED_NOTE = "⤵️ <i>Revised below.</i>"
 
@@ -177,7 +176,6 @@ async def handle_callback(
         Action.APPROVE: SAVING_MESSAGE,
         Action.RETRY: SAVING_MESSAGE,
         Action.UNDO: UNDOING_MESSAGE,
-        Action.ADD_TASK: ADDING_TASK_MESSAGE,
     }.get(action)
     if pending_message is not None:
         await query.edit_message_text(pending_message, parse_mode=ParseMode.HTML)
@@ -187,8 +185,6 @@ async def handle_callback(
             result = await intake_service.finalize_approval(confirmation_id)
         elif action == Action.UNDO:
             result = await intake_service.undo_commit(confirmation_id)
-        elif action == Action.ADD_TASK:
-            result = await intake_service.add_to_existing_project(confirmation_id)
         elif action == Action.APPROVE:
             result = await intake_service.approve(confirmation_id)
         else:

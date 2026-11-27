@@ -84,15 +84,8 @@ def render_change_summary(before: ProjectDraft, after: ProjectDraft) -> str | No
         if old != new:
             changes.append(f"{label} {old} → {new}")
 
-    if len(before.tasks) != len(after.tasks):
-        changes.append(f"tasks {len(before.tasks)} → {len(after.tasks)}")
-    elif before.tasks != after.tasks:
-        changes.append("tasks rewritten")
-
     if before.project_name != after.project_name:
         changes.append("title rewritten")
-    if before.summary != after.summary:
-        changes.append("summary rewritten")
     if before.source_url != after.source_url:
         changes.append("source changed")
 
@@ -127,7 +120,7 @@ def render_draft_message(
     draft: ProjectDraft,
     grounding: Grounding | None = None,
 ) -> str:
-    """Render the review card: title first, then meta, summary, source, tasks."""
+    """Render the review card: title first, then meta, summary, source, topics."""
     lines = [
         f"<b>{escape(draft.project_name)}</b>",
         _render_chips(draft),
@@ -138,10 +131,6 @@ def render_draft_message(
     if draft.source_url:
         lines.append("")
         lines.append(_render_source(draft.source_url, grounding))
-
-    if draft.tasks:
-        lines.append("")
-        lines.extend(f"☑︎ {escape(task)}" for task in draft.tasks)
 
     if draft.topics:
         lines.append("")
@@ -314,7 +303,7 @@ def render_terminal_message(
         lines.append("<i>Send the item again if you want it back.</i>")
         return "\n".join(lines)
 
-    lines.append(f"{_render_chips(draft)} · {_task_count(draft)}")
+    lines.append(_render_chips(draft))
     return "\n".join(lines)
 
 
@@ -358,24 +347,11 @@ def build_terminal_keyboard(
             [
                 [
                     InlineKeyboardButton("↗️ Open existing", url=notion_project_url),
-                    InlineKeyboardButton(
-                        "＋ Add task there",
-                        callback_data=encode_callback(
-                            ConfirmationAction(Action.ADD_TASK, confirmation_id)
-                        ),
-                    ),
                 ]
             ]
         )
 
     return None
-
-
-def _task_count(draft: ProjectDraft) -> str:
-    count = len(draft.tasks)
-    if count == 0:
-        return "no tasks"
-    return "1 task" if count == 1 else f"{count} tasks"
 
 
 def _format_created_time(created_time: str | None) -> str | None:

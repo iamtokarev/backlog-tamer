@@ -63,7 +63,6 @@ class ConfirmationRecord(BaseModel):
     resolved_at: datetime | None = None
     notion_project_id: str | None = None
     notion_project_url: str | None = None
-    notion_task_ids: list[str] = []
     failure_reason: str | None = None
 
     @field_validator("manual_edits", mode="before")

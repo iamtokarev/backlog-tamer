@@ -19,7 +19,6 @@ def settings_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEGRAM__BOT_TOKEN", "test-bot-token")
     monkeypatch.setenv("TELEGRAM__ALLOWED_USER_ID", "42")
     monkeypatch.setenv("NOTION_PROJECTS_DATABASE_ID", "test-projects-db")
-    monkeypatch.setenv("NOTION_TASKS_DATABASE_ID", "test-tasks-db")
     return tmp_path / ".env"
 
 
