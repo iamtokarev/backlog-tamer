@@ -195,6 +195,25 @@ class NotionWriter:
         options = (definition.get("multi_select") or {}).get("options") or []
         return [str(option["name"]) for option in options if option.get("name")]
 
+    async def list_projects(self) -> list[dict[str, Any]]:
+        """Every page in the Projects database, raw; the eval's golden export."""
+        pages: list[dict[str, Any]] = []
+        body: dict[str, Any] = {"page_size": 100}
+        async with self._session() as client:
+            while True:
+                response = await client.post(
+                    f"{NOTION_API_BASE_URL}/databases/"
+                    f"{self.projects_database_id}/query",
+                    headers=self._headers(),
+                    json=body,
+                )
+                _raise_for_notion_error(response)
+                payload = response.json()
+                pages.extend(payload.get("results") or [])
+                if not payload.get("has_more"):
+                    return pages
+                body = {**body, "start_cursor": payload["next_cursor"]}
+
     async def find_project_by_source(self, source_url: str) -> ExistingProject | None:
         """Look for a project already saved from this URL.
 

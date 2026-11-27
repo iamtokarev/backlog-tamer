@@ -78,18 +78,20 @@ def worker_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 def _healthcheck() -> dict[str, Any]:
     """Prove the deployed image can do real work, and report its version.
 
-    Invoked by the deploy workflow. The imports are deliberately eager: the
-    Triage, source reader and Notion modules are otherwise only loaded when a
-    real update arrives, so a broken image would first surface as a failed
-    user message.
+    Invoked by the deploy workflow. It calls the configured decision and title
+    models once each, so a retired slug, a typo or a bad key fails the deploy
+    instead of the first real capture. The source reader import stays eager:
+    it is otherwise only loaded when a real update arrives.
     """
     from importlib.metadata import version
 
-    from backlog_tamer import triage  # noqa: F401
     from backlog_tamer.integrations import source_reader  # noqa: F401
     from backlog_tamer.integrations.notion import NotionWriter
+    from backlog_tamer.triage import Triage
 
     settings = _get_settings()
+
+    asyncio.run(Triage.from_settings(settings).probe())
 
     # A property renamed in Notion otherwise surfaces as a 400 during
     # finalize_approval, after the user has already approved the draft.
@@ -110,6 +112,10 @@ def _healthcheck() -> dict[str, Any]:
     return {
         "ok": True,
         "version": installed_version,
+        "models": {
+            "decision": settings.triage.decision_model,
+            "title": settings.triage.title_model,
+        },
         "skipped_notion_properties": schema.skipped_project_properties,
         # A blank column is cosmetic; a missing Source turns duplicate
         # detection off without anything else saying so.

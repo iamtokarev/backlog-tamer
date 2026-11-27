@@ -604,3 +604,27 @@ def test_commit_makes_one_page_and_ignores_the_existing_tag_vocabulary():
     assert len(client.posts) == 1
     tags = client.posts[0][1]["properties"]["Tags"]["multi_select"]
     assert tags == [{"name": "agent-evaluation"}]
+
+
+def test_list_projects_follows_every_page_of_the_query():
+    class PagedClient(FakeClient):
+        async def post(self, url: str, *, headers, json) -> FakeResponse:
+            self.posts.append((url, json))
+            if "start_cursor" not in json:
+                return FakeResponse(
+                    {"results": [{"id": "a"}], "has_more": True, "next_cursor": "c1"}
+                )
+            return FakeResponse({"results": [{"id": "b"}], "has_more": False})
+
+    client = PagedClient()
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        client=client,
+    )
+
+    pages = asyncio.run(writer.list_projects())
+
+    assert [page["id"] for page in pages] == ["a", "b"]
+    assert client.posts[0][0].endswith("/databases/projects-db/query")
+    assert client.posts[1][1]["start_cursor"] == "c1"
