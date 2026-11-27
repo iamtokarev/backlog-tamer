@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backlog_tamer.agents.intake_triage.prompts import INTAKE_TRIAGE_INSTRUCTIONS
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
+from backlog_tamer.domain import ProjectDraft
 
 PROJECT_TYPES = [
     "paper",

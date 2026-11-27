@@ -16,7 +16,6 @@ import pytest
 from fakes import FakeNotionWriter, ScriptedTriageWorkflow, build_settings
 from telegram import ForceReply, MessageEntity
 
-from backlog_tamer.agents.intake_triage.schemas import DraftGrounding, ProjectDraft
 from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     Checkpoint,
@@ -25,6 +24,7 @@ from backlog_tamer.agents.intake_triage.triage_workflow import (
 )
 from backlog_tamer.application.confirmation_store import ConfirmationStore
 from backlog_tamer.application.intake_service import IntakeService
+from backlog_tamer.domain import Grounding, ProjectDraft
 from backlog_tamer.integrations.notion import ExistingProject
 from backlog_tamer.integrations.telegram.callbacks import (
     Action,
@@ -67,12 +67,12 @@ def _draft(**overrides) -> ProjectDraft:
 
 def _needs_review(
     draft: ProjectDraft | None = None,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
     turn: int = 1,
 ) -> NeedsReview:
     return NeedsReview(
         draft=draft or _draft(),
-        grounding=grounding or DraftGrounding(fetch_status="success"),
+        grounding=grounding or Grounding(fetch_status="success"),
         review_message="Review the proposed draft.",
         checkpoint=Checkpoint(
             user_id=str(ALLOWED_USER_ID),
@@ -505,7 +505,7 @@ def test_a_failed_draft_says_so(tmp_path: Path):
 
 
 def test_retry_fetch_redrafts_from_a_fresh_read_of_the_page(tmp_path: Path):
-    failed_fetch = DraftGrounding(fetch_status="error", fetch_error="HTTP 503")
+    failed_fetch = Grounding(fetch_status="error", fetch_error="HTTP 503")
     chat = Chat(
         tmp_path,
         _needs_review(grounding=failed_fetch),
@@ -527,7 +527,7 @@ def test_retry_fetch_redrafts_from_a_fresh_read_of_the_page(tmp_path: Path):
 def test_a_stale_button_after_the_review_closed_shows_where_it_ended(
     tmp_path: Path,
 ):
-    failed_fetch = DraftGrounding(fetch_status="error", fetch_error="HTTP 503")
+    failed_fetch = Grounding(fetch_status="error", fetch_error="HTTP 503")
     chat = Chat(tmp_path, _needs_review(grounding=failed_fetch), Rejected(draft=None))
     chat.send_link()
     card = chat.last
@@ -578,7 +578,7 @@ def test_an_unexpected_failure_keeps_the_draft_open(tmp_path: Path):
 
 
 def test_an_unexpected_refetch_failure_keeps_the_draft_open(tmp_path: Path):
-    failed_fetch = DraftGrounding(fetch_status="error", fetch_error="HTTP 503")
+    failed_fetch = Grounding(fetch_status="error", fetch_error="HTTP 503")
     chat = Chat(tmp_path, _needs_review(grounding=failed_fetch))
     chat.send_link()
     card = chat.last

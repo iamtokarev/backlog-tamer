@@ -14,7 +14,6 @@ from google.adk.events import Event
 from google.adk.events.event_actions import EventActions
 from google.adk.sessions import InMemorySessionService
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext
 from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     NeedsReview,
@@ -28,6 +27,7 @@ from backlog_tamer.agents.intake_triage.workflow import (
     ROUTE_REJECTED,
     build_intake_workflow,
 )
+from backlog_tamer.domain import IncomingContext
 
 SOURCE_URL = "https://blog.langchain.com/langgraph/"
 

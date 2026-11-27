@@ -5,7 +5,6 @@ import asyncio
 
 from google.adk.sessions import InMemorySessionService
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, SourceLink
 from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     NeedsReview,
@@ -15,6 +14,7 @@ from backlog_tamer.agents.intake_triage.triage_workflow import (
     TurnOutcome,
 )
 from backlog_tamer.config import get_settings
+from backlog_tamer.domain import IncomingContext, SourceLink
 
 USER_ID = "dev_user"
 
@@ -55,12 +55,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="FEEDBACK",
         help="Send one Revision with this feedback instead of prompting.",
-    )
-    parser.add_argument(
-        "--engine",
-        choices=("agent", "decision"),
-        default=None,
-        help="Triage engine; defaults to TRIAGE__ENGINE (agent).",
     )
     parser.add_argument(
         "--user-id",
@@ -116,15 +110,10 @@ async def decide(
 async def main() -> None:
     args = parse_args()
     settings = get_settings()
-    if (args.engine or settings.triage.engine) == "decision":
-        from backlog_tamer.agents.decision_triage import DecisionTriage
-
-        workflow = DecisionTriage.from_settings(settings, "sqlite:///:memory:")
-    else:
-        workflow = TriageWorkflow.from_settings(
-            settings,
-            session_service=InMemorySessionService(),
-        )
+    workflow = TriageWorkflow.from_settings(
+        settings,
+        session_service=InMemorySessionService(),
+    )
     outcome = await workflow.start(build_context(args), args.user_id, [])
     render_outcome(outcome)
 

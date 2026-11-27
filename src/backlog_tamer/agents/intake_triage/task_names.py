@@ -9,7 +9,7 @@ same rule produced "Explore" for one course and "Read" for another.
 
 from __future__ import annotations
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
+from backlog_tamer.domain import ProjectDraft
 
 # Intent says what the user wants to do with the item, so it picks the verb.
 INTENT_VERBS = {

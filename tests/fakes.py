@@ -7,16 +7,16 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
-    IncomingContext,
-    ProjectDraft,
-)
 from backlog_tamer.agents.intake_triage.triage_workflow import (
     Checkpoint,
     TurnOutcome,
 )
 from backlog_tamer.config import Settings
+from backlog_tamer.domain import (
+    Grounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.integrations.notion import ExistingProject, NotionCommitResult
 from backlog_tamer.integrations.telegram.config import TelegramConfig
 
@@ -118,7 +118,7 @@ class FakeNotionWriter:
         self.fail = fail
         self.calls: list[ProjectDraft] = []
         self.contexts: list[IncomingContext | None] = []
-        self.groundings: list[DraftGrounding | None] = []
+        self.groundings: list[Grounding | None] = []
         self.existing_project: ExistingProject | None = None
         self.archived: list[str] = []
         self.added_task_project_ids: list[str] = []
@@ -138,7 +138,7 @@ class FakeNotionWriter:
         *,
         project_id: str,
         draft: ProjectDraft,
-        grounding: DraftGrounding | None = None,
+        grounding: Grounding | None = None,
     ):
         self.added_task_project_ids.append(project_id)
         return ["new-task-id"]
@@ -147,7 +147,7 @@ class FakeNotionWriter:
         self,
         draft: ProjectDraft,
         incoming_context: IncomingContext | None = None,
-        grounding: DraftGrounding | None = None,
+        grounding: Grounding | None = None,
     ) -> NotionCommitResult:
         self.calls.append(draft)
         self.contexts.append(incoming_context)

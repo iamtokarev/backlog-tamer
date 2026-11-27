@@ -6,8 +6,8 @@ from uuid import uuid4
 
 import pytest
 
-from backlog_tamer.agents.intake_triage.schemas import DraftGrounding, ProjectDraft
 from backlog_tamer.application.models import ConfirmationStatus
+from backlog_tamer.domain import Grounding, ProjectDraft
 from backlog_tamer.integrations.telegram.callbacks import (
     Action,
     ConfirmationAction,
@@ -122,9 +122,7 @@ def test_every_button_the_bot_builds_fits_telegram_and_decodes():
         tasks=["Read"],
     )
     keyboards = [
-        build_review_keyboard(
-            draft, confirmation_id, DraftGrounding(fetch_status="error")
-        ),
+        build_review_keyboard(draft, confirmation_id, Grounding(fetch_status="error")),
         build_cancel_revision_keyboard(confirmation_id),
         *(build_picker_keyboard(field, confirmation_id) for field in FIELD_OPTIONS),
         *(

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
 from backlog_tamer.agents.intake_triage.task_names import (
     compose_task_names,
     with_composed_task_names,
 )
+from backlog_tamer.domain import ProjectDraft
 
 
 def _draft(**overrides) -> ProjectDraft:

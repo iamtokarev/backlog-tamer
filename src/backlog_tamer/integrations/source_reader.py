@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pypdf import PdfReader
 from stagehand import Stagehand, browserbase
 
+from backlog_tamer.domain import Grounding
 from backlog_tamer.source_urls import normalize_source_url, youtube_watch_url
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ MAX_REDIRECTS = 5
 MAX_PDF_PAGES = 5
 MAX_PREVIEW_CHARS = 1_200
 MAX_KEY_POINTS = 5
+MAX_GROUNDING_KEY_POINTS = 4
 _REDIRECTS = {301, 302, 303, 307, 308}
 _PROVIDER_TERMINAL_STATUSES = {401, 402, 403, 429}
 _EXTRACT_INSTRUCTION = (
@@ -69,6 +71,25 @@ class FetchedUrl(BaseModel):
     content_preview: str | None = Field(default=None, max_length=1600)
     notes: list[str] = Field(default_factory=list)
     error: str | None = None
+
+    def to_grounding(self) -> Grounding:
+        """What a Draft keeps of this read; an error keeps only the reason."""
+        if self.status != "success":
+            return Grounding(fetch_status="error", fetch_error=self.error)
+        return Grounding(
+            fetch_status="success",
+            site_name=self.site_name,
+            page_title=self.title,
+            canonical_url=self.canonical_url or self.final_url,
+            final_url=self.final_url,
+            description=self.description,
+            author=self.author,
+            published_at=self.published_at,
+            domain=self.domain,
+            page_kind=self.page_kind,
+            key_points=[p for p in self.key_points if p][:MAX_GROUNDING_KEY_POINTS],
+            content_preview=self.content_preview,
+        )
 
 
 class _PageGrounding(BaseModel):

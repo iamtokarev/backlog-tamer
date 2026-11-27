@@ -21,9 +21,9 @@ from backlog_tamer.database_urls import (
     async_engine_options,
     to_adk_session_database_url,
 )
+from backlog_tamer.domain import Grounding, IncomingContext, ProjectDraft
 
 from .prompts import REFETCH_FEEDBACK, build_revision_feedback
-from .schemas import DraftGrounding, IncomingContext, ProjectDraft
 from .task_names import with_composed_task_names
 from .workflow import (
     DRAFT_PROPOSAL_STATE_KEY,
@@ -55,7 +55,7 @@ class Checkpoint:
 @dataclass(frozen=True)
 class NeedsReview:
     draft: ProjectDraft
-    grounding: DraftGrounding
+    grounding: Grounding
     review_message: str
     checkpoint: Checkpoint
 
@@ -325,18 +325,18 @@ def _find_route(events: list[Any]) -> str | None:
 def _grounding_from_state(
     state: dict[str, Any],
     draft: ProjectDraft,
-) -> DraftGrounding:
+) -> Grounding:
     """Summarise what fetch_url found, for the card and the Notion page."""
     fetched = state.get(FETCHED_CONTEXT_STATE_KEY)
     if not isinstance(fetched, dict) or not fetched:
-        return DraftGrounding(fetch_status="skipped")
+        return Grounding(fetch_status="skipped")
 
     payload = _match_fetched_entry(fetched, draft.source_url)
     if not isinstance(payload, dict):
-        return DraftGrounding(fetch_status="skipped")
+        return Grounding(fetch_status="skipped")
 
     if payload.get("status") != "success":
-        return DraftGrounding(
+        return Grounding(
             fetch_status="error",
             fetch_error=payload.get("error"),
         )
@@ -344,7 +344,7 @@ def _grounding_from_state(
     key_points = [
         str(point) for point in (payload.get("key_points") or []) if str(point)
     ]
-    return DraftGrounding(
+    return Grounding(
         fetch_status="success",
         site_name=payload.get("site_name"),
         page_title=payload.get("title"),

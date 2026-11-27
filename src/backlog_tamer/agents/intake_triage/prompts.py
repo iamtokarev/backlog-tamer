@@ -1,4 +1,4 @@
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
+from backlog_tamer.domain import IncomingContext, ProjectDraft
 
 # The existing tag vocabulary is a hint, not the subject of the prompt.
 MAX_KNOWN_TOPICS = 120

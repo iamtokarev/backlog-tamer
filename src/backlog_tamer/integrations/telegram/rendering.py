@@ -6,12 +6,12 @@ from urllib.parse import urlparse
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
+from backlog_tamer.application.models import ConfirmationStatus
+from backlog_tamer.domain import (
+    Grounding,
     IncomingContext,
     ProjectDraft,
 )
-from backlog_tamer.application.models import ConfirmationStatus
 
 from .callbacks import (
     Action,
@@ -125,7 +125,7 @@ def render_progress_message(incoming: IncomingContext) -> str:
 
 def render_draft_message(
     draft: ProjectDraft,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
 ) -> str:
     """Render the review card: title first, then meta, summary, source, tasks."""
     lines = [
@@ -154,14 +154,14 @@ def render_draft_message(
     return "\n".join(lines)
 
 
-def _render_source(source_url: str, grounding: DraftGrounding | None) -> str:
+def _render_source(source_url: str, grounding: Grounding | None) -> str:
     line = f"🔗 {_link(source_url, _display_url(source_url))}"
     if grounding is not None and grounding.site_name:
         line = f"{line} · {escape(grounding.site_name)}"
     return line
 
 
-def _render_fetch_warning(grounding: DraftGrounding) -> str:
+def _render_fetch_warning(grounding: Grounding) -> str:
     """State the uncertainty rather than letting a guess look grounded."""
     reason = f" ({escape(grounding.fetch_error)})" if grounding.fetch_error else ""
     return (
@@ -190,7 +190,7 @@ def _display_url(url: str) -> str:
 def build_review_keyboard(
     draft: ProjectDraft,
     confirmation_id: str,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
 ) -> InlineKeyboardMarkup:
     """Approve/reject, plus one-tap pickers for the three enum fields."""
     refetch_row = []

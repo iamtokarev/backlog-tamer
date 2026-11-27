@@ -7,9 +7,9 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationStatus, IntakeResult
+from backlog_tamer.domain import ProjectDraft
 
 from .callbacks import (
     Action,

@@ -10,8 +10,8 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import SecretStr
 
-from backlog_tamer.agents.intake_triage.schemas import ProjectDraft
 from backlog_tamer.config import AgentConfig, get_settings
+from backlog_tamer.domain import ProjectDraft
 
 DRAFT = {
     "project_name": "Example: learn tool calling",
@@ -240,11 +240,11 @@ def test_model_authentication_error_propagates_without_fallback(
 def test_workflow_persists_draft_and_returns_to_review_after_revision(
     model_factory, model_http
 ):
-    from backlog_tamer.agents.intake_triage.schemas import IncomingContext
     from backlog_tamer.agents.intake_triage.triage_workflow import (
         NeedsReview,
         TriageWorkflow,
     )
+    from backlog_tamer.domain import IncomingContext
 
     requests, responses = model_http
     revised = {**DRAFT, "priority": "High"}
