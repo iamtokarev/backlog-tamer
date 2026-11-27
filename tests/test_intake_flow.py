@@ -8,11 +8,6 @@ from pathlib import Path
 import pytest
 from fakes import FakeNotionWriter, ScriptedTriageWorkflow, build_settings
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
-    IncomingContext,
-    ProjectDraft,
-)
 from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     Checkpoint,
@@ -22,6 +17,11 @@ from backlog_tamer.agents.intake_triage.triage_workflow import (
 from backlog_tamer.application.confirmation_store import ConfirmationStore
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationStatus
+from backlog_tamer.domain import (
+    Grounding,
+    IncomingContext,
+    ProjectDraft,
+)
 
 FIRST_CHECKPOINT = Checkpoint(
     user_id="user-id",
@@ -48,11 +48,11 @@ def _draft(**overrides) -> ProjectDraft:
 def _needs_review(
     draft: ProjectDraft | None = None,
     checkpoint: Checkpoint = FIRST_CHECKPOINT,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
 ) -> NeedsReview:
     return NeedsReview(
         draft=draft or _draft(),
-        grounding=grounding or DraftGrounding(fetch_status="skipped"),
+        grounding=grounding or Grounding(fetch_status="skipped"),
         review_message="Review the proposed draft.",
         checkpoint=checkpoint,
     )
@@ -82,7 +82,7 @@ class Harness:
 
 
 def test_start_persists_a_pending_confirmation_for_the_draft(tmp_path: Path):
-    grounding = DraftGrounding(fetch_status="success", site_name="LangChain Blog")
+    grounding = Grounding(fetch_status="success", site_name="LangChain Blog")
     harness = Harness(tmp_path, _needs_review(grounding=grounding))
     harness.writer.tag_options = ["langgraph"]
 
@@ -237,7 +237,7 @@ def test_a_decision_on_an_unknown_confirmation_is_an_error(tmp_path: Path):
 
 
 def test_get_review_shows_the_draft_awaiting_review(tmp_path: Path):
-    grounding = DraftGrounding(fetch_status="success", site_name="LangChain Blog")
+    grounding = Grounding(fetch_status="success", site_name="LangChain Blog")
     harness = Harness(tmp_path, _needs_review(grounding=grounding))
     started = harness.start()
 
@@ -284,10 +284,10 @@ def test_a_quick_edit_after_the_review_ended_is_refused(tmp_path: Path):
 
 
 def test_refetch_redrafts_from_the_checkpoint_keeping_quick_edits(tmp_path: Path):
-    regrounded = DraftGrounding(fetch_status="success", site_name="LangChain Blog")
+    regrounded = Grounding(fetch_status="success", site_name="LangChain Blog")
     harness = Harness(
         tmp_path,
-        _needs_review(grounding=DraftGrounding(fetch_status="error")),
+        _needs_review(grounding=Grounding(fetch_status="error")),
         _needs_review(checkpoint=SECOND_CHECKPOINT, grounding=regrounded),
     )
     started = harness.start()

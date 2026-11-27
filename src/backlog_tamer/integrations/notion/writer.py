@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -11,12 +10,13 @@ from typing import Any
 
 import httpx
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
+from backlog_tamer.config import Settings
+from backlog_tamer.domain import (
+    Grounding,
     IncomingContext,
     ProjectDraft,
+    fold_tag,
 )
-from backlog_tamer.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class NotionWriter:
         self,
         draft: ProjectDraft,
         incoming_context: IncomingContext | None = None,
-        grounding: DraftGrounding | None = None,
+        grounding: Grounding | None = None,
     ) -> NotionCommitResult:
         known_tags = await self.list_tag_options()
         async with self._session() as client:
@@ -181,7 +181,7 @@ class NotionWriter:
         draft: ProjectDraft,
         captured_at: date | None = None,
         incoming_context: IncomingContext | None = None,
-        grounding: DraftGrounding | None = None,
+        grounding: Grounding | None = None,
         known_tags: list[str] | None = None,
     ) -> dict[str, Any]:
         captured_on = captured_at or date.today()
@@ -308,7 +308,7 @@ class NotionWriter:
         *,
         project_id: str,
         draft: ProjectDraft,
-        grounding: DraftGrounding | None = None,
+        grounding: Grounding | None = None,
     ) -> list[str]:
         """Attach this draft's tasks to a project that already exists."""
         async with self._session() as client:
@@ -540,7 +540,7 @@ class NotionWriter:
 
 def commit_source_url(
     draft: ProjectDraft,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
 ) -> str | None:
     """The URL to store, preferring the canonical one.
 
@@ -557,7 +557,7 @@ def build_project_children(
     draft: ProjectDraft,
     *,
     incoming_context: IncomingContext | None = None,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
     captured_on: date | None = None,
 ) -> list[dict[str, Any]]:
     """The page body.
@@ -728,7 +728,7 @@ def _normalized_topics(
     "agent-evaluation" stops becoming a second option beside "agent
     evaluation". Existing tags are never rewritten, only matched against.
     """
-    existing = {_tag_key(tag): tag for tag in reversed(known_tags or [])}
+    existing = {fold_tag(tag): tag for tag in reversed(known_tags or [])}
 
     seen: list[str] = []
     for topic in topics:
@@ -736,19 +736,10 @@ def _normalized_topics(
         cleaned = " ".join(cleaned.split())
         if not cleaned:
             continue
-        cleaned = existing.get(_tag_key(cleaned), cleaned)
+        cleaned = existing.get(fold_tag(cleaned), cleaned)
         if cleaned not in seen:
             seen.append(cleaned)
     return seen[:3]
-
-
-def _tag_key(tag: str) -> str:
-    """Fold spelling differences that should not create a second tag."""
-    folded = re.sub(r"[^a-z0-9]+", " ", tag.casefold()).strip()
-    return " ".join(
-        word[:-1] if len(word) > 3 and word.endswith("s") else word
-        for word in folded.split()
-    )
 
 
 class NotionApiError(RuntimeError):

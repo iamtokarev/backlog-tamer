@@ -5,7 +5,6 @@ from uuid import uuid4
 
 import pytest
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
 from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 from backlog_tamer.application.confirmation_store import (
     ConfirmationStore,
@@ -17,6 +16,7 @@ from backlog_tamer.application.models import (
     ConfirmationStatus,
     ManualEdit,
 )
+from backlog_tamer.domain import IncomingContext, ProjectDraft
 from backlog_tamer.integrations.telegram.callbacks import PickValue, decode_callback
 from backlog_tamer.integrations.telegram.rendering import (
     FIELD_OPTIONS,

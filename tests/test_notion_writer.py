@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from backlog_tamer.agents.intake_triage.schemas import (
+from backlog_tamer.domain import (
     IncomingContext,
     ProjectDraft,
     SourceLink,
@@ -758,7 +758,7 @@ def test_a_topic_folds_onto_the_tag_spelling_already_in_use():
 
 
 def test_source_stores_the_canonical_url_so_a_recapture_can_match_it():
-    from backlog_tamer.agents.intake_triage.schemas import DraftGrounding
+    from backlog_tamer.domain import Grounding
 
     draft = ProjectDraft(
         project_name="LangChain Deep Agents: build long-running AI agents",
@@ -770,7 +770,7 @@ def test_source_stores_the_canonical_url_so_a_recapture_can_match_it():
         source_url="https://academy.langchain.com/courses/deepagents?_gl=1*174rmm0",
         tasks=["Work through: LangChain Deep Agents"],
     )
-    grounding = DraftGrounding(
+    grounding = Grounding(
         fetch_status="success",
         canonical_url="https://academy.langchain.com/courses/deepagents",
     )

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from backlog_tamer.agents.intake_triage.schemas import (
+from backlog_tamer.application.models import ConfirmationStatus
+from backlog_tamer.domain import (
     IncomingContext,
     ProjectDraft,
     SourceLink,
 )
-from backlog_tamer.application.models import ConfirmationStatus
 from backlog_tamer.integrations.telegram.rendering import (
     build_terminal_keyboard,
     render_change_summary,

@@ -1,4 +1,4 @@
-"""OpenRouter calls for decision triage: typed decisions and the title LLM.
+"""OpenRouter calls for Triage: typed decisions and the title LLM.
 
 A fresh httpx client per call: Lambda creates a new event loop for each
 invocation, so nothing async may outlive one.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
@@ -21,6 +22,8 @@ OPENROUTER_API = "https://openrouter.ai/api"
 RETRY_STATUSES = frozenset({429, 502, 503, 524, 529})
 MAX_ATTEMPTS = 4
 TIMEOUT_SECONDS = 60
+# Decider rejects requests with more questions than this.
+MAX_QUESTIONS_PER_REQUEST = 128
 
 TITLE_SYSTEM = """
 You write one backlog title for a saved learning item. Return JSON only.
@@ -32,7 +35,6 @@ You write one backlog title for a saved learning item. Return JSON only.
 - With no proper name, describe the subject, e.g. "Vector index tradeoffs
   for hybrid search".
 - Concrete and specific; no hype or claims the source does not support.
-- short_name: the bare 2-4 word handle, the part before the colon.
 - If reviewer feedback is given, apply it directly. When the feedback gives an
   exact title, use it verbatim even if it breaks the rules above.
 """.strip()
@@ -45,10 +47,9 @@ TITLE_SCHEMA = {
         "schema": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["project_name", "short_name"],
+            "required": ["project_name"],
             "properties": {
                 "project_name": {"type": "string"},
-                "short_name": {"type": "string"},
             },
         },
     },
@@ -56,24 +57,48 @@ TITLE_SCHEMA = {
 
 
 @dataclass(frozen=True)
-class Title:
-    project_name: str
-    short_name: str
+class Usage:
+    """One model call, for logs and the eval's cost numbers."""
+
+    path: str
+    model: str | None
+    seconds: float
+    input_tokens: int | None
+    cost: float | None
+
+
+def log_usage(usage: Usage) -> None:
+    logger.info(
+        "decision_triage_call path=%s model=%s seconds=%.2f input_tokens=%s",
+        usage.path,
+        usage.model,
+        usage.seconds,
+        usage.input_tokens,
+    )
 
 
 class DecisionClient:
-    def __init__(self, api_key: str, *, decision_model: str, title_model: str):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        decision_model: str,
+        title_model: str,
+        on_usage: Callable[[Usage], None] | None = None,
+    ):
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
         self.decision_model = decision_model
         self.title_model = title_model
+        self._on_usage = on_usage or log_usage
 
     async def decide(self, state: Any, questions: dict[str, Any]) -> dict[str, Any]:
         """Answers keyed like `questions`; providers that cap the count get chunks."""
         names = list(questions)
-        chunks = [names[i : i + 128] for i in range(0, len(names), 128)]
+        step = MAX_QUESTIONS_PER_REQUEST
+        chunks = [names[i : i + step] for i in range(0, len(names), step)]
         bodies = await asyncio.gather(
             *(
                 self._post(
@@ -98,7 +123,8 @@ class DecisionClient:
         *,
         feedback: str | None = None,
         current: str | None = None,
-    ) -> Title:
+    ) -> str:
+        """The project_name for `page`, applying reviewer feedback if given."""
         lines = [f"page: {json.dumps(page, ensure_ascii=False)}"]
         if current:
             lines.append(f"current_title: {current}")
@@ -118,10 +144,7 @@ class DecisionClient:
             },
         )
         payload = json.loads(body["choices"][0]["message"]["content"])
-        return Title(
-            project_name=payload["project_name"].strip(),
-            short_name=payload["short_name"].strip()[:60],
-        )
+        return payload["project_name"].strip()
 
     async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
@@ -141,13 +164,16 @@ class DecisionClient:
                 response.raise_for_status()
                 payload = response.json()
                 usage = payload.get("usage") or {}
-                logger.info(
-                    "decision_triage_call path=%s model=%s seconds=%.2f "
-                    "input_tokens=%s",
-                    path,
-                    body.get("model"),
-                    perf_counter() - start,
-                    usage.get("input_tokens", usage.get("prompt_tokens")),
+                self._on_usage(
+                    Usage(
+                        path=path,
+                        model=body.get("model"),
+                        seconds=perf_counter() - start,
+                        input_tokens=usage.get(
+                            "input_tokens", usage.get("prompt_tokens")
+                        ),
+                        cost=usage.get("cost"),
+                    )
                 )
                 return payload
         raise RuntimeError("unreachable")

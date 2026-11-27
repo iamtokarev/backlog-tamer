@@ -7,14 +7,14 @@ from sqlalchemy import DateTime, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-from backlog_tamer.agents.intake_triage.schemas import (
+from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
+from backlog_tamer.database_urls import to_sync_database_url, uses_external_pooler
+from backlog_tamer.domain import (
     LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE,
-    DraftGrounding,
+    Grounding,
     IncomingContext,
     ProjectDraft,
 )
-from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
-from backlog_tamer.database_urls import to_sync_database_url, uses_external_pooler
 
 from .models import ConfirmationRecord, ConfirmationStatus, ManualEdit
 
@@ -87,7 +87,7 @@ class ConfirmationStore:
         draft_proposal: ProjectDraft,
         checkpoint: Checkpoint,
         review_message: str,
-        grounding: DraftGrounding | None = None,
+        grounding: Grounding | None = None,
     ) -> None:
         with self.session_factory.begin() as session:
             row = self._get_required_row(session, confirmation_id)
@@ -344,13 +344,13 @@ def _load_task_ids(raw: str | None) -> list[str]:
     return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
-def _load_grounding(raw: str | None) -> DraftGrounding:
+def _load_grounding(raw: str | None) -> Grounding:
     if not raw:
-        return DraftGrounding()
+        return Grounding()
     try:
-        return DraftGrounding.model_validate_json(raw)
+        return Grounding.model_validate_json(raw)
     except ValueError:
-        return DraftGrounding()
+        return Grounding()
 
 
 def _load_manual_edits(raw: str | None) -> dict[str, ManualEdit]:

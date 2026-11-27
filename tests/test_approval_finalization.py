@@ -6,14 +6,14 @@ from pathlib import Path
 import pytest
 from fakes import FakeNotionWriter, ScriptedTriageWorkflow, build_settings
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    IncomingContext,
-    ProjectDraft,
-)
 from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 from backlog_tamer.application.confirmation_store import ConfirmationStore, utc_now
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationRecord, ConfirmationStatus
+from backlog_tamer.domain import (
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.integrations.notion import ExistingProject
 
 

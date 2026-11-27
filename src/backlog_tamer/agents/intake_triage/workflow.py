@@ -6,13 +6,14 @@ from google.adk.events import Event, RequestInput
 from google.adk.events.event_actions import EventActions
 from google.genai import types
 
+from backlog_tamer.domain import IncomingContext, ProjectDraft
+
 from .prompts import (
     build_review_message,
     build_review_snapshot,
     build_revision_prompt,
     build_triage_prompt,
 )
-from .schemas import IncomingContext, ProjectDraft
 
 REVIEW_INTERRUPT_ID = "human_review"
 TRIAGE_INPUT_STATE_KEY = "triage_input"

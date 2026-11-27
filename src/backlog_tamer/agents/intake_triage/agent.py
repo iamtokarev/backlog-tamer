@@ -3,10 +3,10 @@ from google.adk.models.lite_llm import LiteLlm
 from pydantic import SecretStr
 
 from backlog_tamer.config import AgentConfig, get_settings
+from backlog_tamer.domain import ProjectDraft
 from backlog_tamer.integrations.source_reader import SourceReader
 
 from .prompts import INTAKE_TRIAGE_INSTRUCTIONS
-from .schemas import ProjectDraft
 from .tools.fetch_url import make_fetch_url_tool
 from .workflow import DRAFT_PROPOSAL_STATE_KEY, build_intake_workflow
 

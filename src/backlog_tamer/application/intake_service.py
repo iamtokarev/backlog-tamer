@@ -5,11 +5,6 @@ import logging
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
-    IncomingContext,
-    ProjectDraft,
-)
 from backlog_tamer.agents.intake_triage.triage_workflow import (
     Approved,
     NeedsReview,
@@ -19,6 +14,11 @@ from backlog_tamer.agents.intake_triage.triage_workflow import (
     TurnOutcome,
 )
 from backlog_tamer.config import Settings, get_settings
+from backlog_tamer.domain import (
+    Grounding,
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.integrations.notion import NotionWriter
 
 from .confirmation_store import ConfirmationStore, utc_now
@@ -47,7 +47,7 @@ TERMINAL_STATUSES = frozenset(
 def _needs_review(
     confirmation_id: str,
     draft: ProjectDraft,
-    grounding: DraftGrounding,
+    grounding: Grounding,
     review_message: str,
 ) -> IntakeResult:
     return IntakeResult(
@@ -103,10 +103,6 @@ def _log_corrections(confirmation: ConfirmationRecord) -> None:
 
 
 def _engine_from_settings(settings: Settings, database_url: str) -> TriageEngine:
-    if settings.triage.engine == "decision":
-        from backlog_tamer.agents.decision_triage import DecisionTriage
-
-        return DecisionTriage.from_settings(settings, database_url)
     return TriageWorkflow.from_settings(settings, database_url)
 
 
