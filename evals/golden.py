@@ -5,7 +5,9 @@
 Exports the Projects database and keeps the rows that have a Source and full
 labels (Project type, Intent, Priority). Each Source is read once by the
 app's SourceReader so every eval run sees identical input; an item that
-already has a Grounding keeps it unless `--refresh` is given.
+already has a Grounding keeps it unless `--refresh` is given. The Tags
+options go to `vocabulary.json`, in Notion's order: that is the vocabulary
+production offers Triage, so the eval offers the same one.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from backlog_tamer.triage.questions import LEGACY_TAGS
 
 DATA = Path(__file__).parent / "data"
 GOLDEN_PATH = DATA / "golden.jsonl"
+VOCABULARY_PATH = DATA / "vocabulary.json"
 FETCH_CONCURRENCY = 4
 
 
@@ -110,12 +113,32 @@ def _plain(prop: dict[str, Any] | None) -> Any:
     return None
 
 
-async def build(refresh: bool) -> list[GoldenItem]:
+def write_vocabulary(tags: list[str], path: Path = VOCABULARY_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(tags, ensure_ascii=False, indent=1) + "\n")
+
+
+def load_vocabulary(path: Path = VOCABULARY_PATH) -> list[str]:
+    """The Notion Tags options, in Notion's order, as production offers them."""
+    if not path.exists():
+        raise SystemExit(
+            f"{path} is missing. Run `mise run eval:golden` to export the "
+            "Notion Tags options with the golden set."
+        )
+    return json.loads(path.read_text())
+
+
+async def build(refresh: bool) -> tuple[list[GoldenItem], list[str]]:
     settings = get_settings()
     writer = NotionWriter.from_settings(settings)
     reader = SourceReader.from_api_key(settings.browserbase_api_key.get_secret_value())
     known = {item.id: item for item in load_golden()} if GOLDEN_PATH.exists() else {}
     pages = await writer.list_projects()
+    # Production offers every Tags option; the golden tags alone are fewer
+    # and would make tagging look easier than it is.
+    vocabulary = await writer.list_tag_options()
+    if not vocabulary:
+        raise SystemExit("Could not read the Tags options of the Projects database.")
     gate = asyncio.Semaphore(FETCH_CONCURRENCY)
 
     async def one(page: dict[str, Any]) -> GoldenItem | None:
@@ -139,7 +162,7 @@ async def build(refresh: bool) -> list[GoldenItem]:
         )
 
     items = [item for item in await asyncio.gather(*map(one, pages)) if item]
-    return items
+    return items, vocabulary
 
 
 def main() -> None:
@@ -150,11 +173,20 @@ def main() -> None:
         help="refetch sources that already have a Grounding",
     )
     args = parser.parse_args()
-    items = asyncio.run(build(args.refresh))
+    items, vocabulary = asyncio.run(build(args.refresh))
     write_golden(items)
+    write_vocabulary(vocabulary)
     fetched = sum(item.grounding.fetch_status == "success" for item in items)
     print(
-        json.dumps({"items": len(items), "fetched": fetched, "path": str(GOLDEN_PATH)})
+        json.dumps(
+            {
+                "items": len(items),
+                "fetched": fetched,
+                "tags": len(vocabulary),
+                "path": str(GOLDEN_PATH),
+                "vocabulary": str(VOCABULARY_PATH),
+            }
+        )
     )
 
 

@@ -24,11 +24,12 @@ from backlog_tamer.config import get_settings
 from backlog_tamer.domain import IncomingContext, ProjectDraft, SourceLink
 from backlog_tamer.triage import DecisionClient, Triage
 from backlog_tamer.triage.client import Usage
+from backlog_tamer.triage.questions import subject_vocabulary
 
 from . import metrics
 from .caching import CachingClient, UsageLog
 from .cases import RevisionCase, revision_cases
-from .golden import DATA, GoldenItem, load_golden
+from .golden import DATA, GoldenItem, load_golden, load_vocabulary
 
 STAGES = ("classify", "revise", "titles")
 CACHE_DIR = DATA / "cache"
@@ -46,21 +47,25 @@ type Measured[T] = tuple[T | None, list[Usage]]
 
 async def evaluate(
     items: list[GoldenItem],
+    vocabulary: list[str],
     client: CachingClient,
     usage: UsageLog,
     *,
     stages: set[str],
 ) -> dict[str, Any]:
-    """The report for `stages` ("all" for every stage) over `items`."""
+    """The report for `stages` ("all" for every stage) over `items`.
+
+    `vocabulary` is the Notion Tags options, as production passes them;
+    Triage drops the legacy type and intent tags itself.
+    """
     wanted = set(STAGES) if "all" in stages else stages
-    vocabulary = golden_vocabulary(items)
     triage = Triage(client)  # CachingClient has the same decide/title
     gate = asyncio.Semaphore(CONCURRENCY)
     report: dict[str, Any] = {
         "model": client.decision_model,
         "title_model": client.title_model,
         "items": len(items),
-        "vocabulary": len(vocabulary),
+        "vocabulary": len(subject_vocabulary(vocabulary)),
     }
 
     drafts: list[Measured[ProjectDraft]] = []
@@ -85,11 +90,6 @@ async def evaluate(
     if "titles" in wanted:
         report["titles"] = await _titles_report(items, drafts, client, usage, gate)
     return report
-
-
-def golden_vocabulary(items: list[GoldenItem]) -> list[str]:
-    """Every approved tag in the golden set, in first-seen order."""
-    return list(dict.fromkeys(tag for item in items for tag in item.gold.topics))
 
 
 def _classify_report(
@@ -118,7 +118,7 @@ def _classify_report(
 
 async def _revise_report(items, triage, usage, gate, vocabulary) -> dict[str, Any]:
     by_id = {item.id: item for item in items}
-    cases = revision_cases(items, vocabulary)
+    cases = revision_cases(items, subject_vocabulary(vocabulary))
 
     async def revise(case: RevisionCase) -> ProjectDraft:
         item = by_id[case.item_id]
@@ -277,6 +277,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, help="only the first N golden items")
     args = parser.parse_args()
 
+    vocabulary = load_vocabulary()
     settings = get_settings()
     usage = UsageLog()
     inner = DecisionClient(
@@ -287,7 +288,9 @@ def main() -> None:
     )
     client = CachingClient(inner, CACHE_DIR, usage=usage)
     items = load_golden()[: args.limit]
-    report = asyncio.run(evaluate(items, client, usage, stages={args.stage}))
+    report = asyncio.run(
+        evaluate(items, vocabulary, client, usage, stages={args.stage})
+    )
 
     print_table(report)
     path = report_path(client.decision_model)

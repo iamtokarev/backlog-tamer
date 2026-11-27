@@ -12,7 +12,7 @@ from backlog_tamer.domain import Grounding, ProjectDraft
 from backlog_tamer.triage.client import Usage
 from evals import metrics
 from evals.caching import CachingClient, UsageLog
-from evals.golden import GoldenItem
+from evals.golden import GoldenItem, load_vocabulary, write_vocabulary
 from evals.run import evaluate
 
 
@@ -188,10 +188,34 @@ class OfflineClient(FakeClient):
         raise AssertionError("served from cache, the client must not be called")
 
 
+# Notion's Tags options: more than the golden tags, plus a legacy intent tag.
+VOCABULARY = ["learn", "langgraph", "rag", "multi-agent", "evals", "mcp"]
+
+
 def run_eval(client_class, cache_dir) -> dict[str, Any]:
     usage = UsageLog()
     client = CachingClient(client_class(on_usage=usage), cache_dir, usage=usage)
-    return asyncio.run(evaluate(GOLDEN, client, usage, stages={"all"}))
+    return asyncio.run(evaluate(GOLDEN, VOCABULARY, client, usage, stages={"all"}))
+
+
+def test_the_vocabulary_is_the_notion_tag_options_not_the_golden_tags(tmp_path):
+    report = run_eval(FakeClient, tmp_path)
+
+    # Every subject option is offered; the legacy "learn" is not a subject tag.
+    assert report["vocabulary"] == 5
+
+
+def test_vocabulary_round_trips_in_notion_order(tmp_path):
+    path = tmp_path / "vocabulary.json"
+
+    write_vocabulary(VOCABULARY, path)
+
+    assert load_vocabulary(path) == VOCABULARY
+
+
+def test_a_missing_vocabulary_says_how_to_build_it(tmp_path):
+    with pytest.raises(SystemExit, match="mise run eval:golden"):
+        load_vocabulary(tmp_path / "vocabulary.json")
 
 
 def test_report_has_every_metric_and_classify_accuracy_matches_the_answers(

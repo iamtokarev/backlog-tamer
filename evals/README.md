@@ -6,8 +6,8 @@ Projects you already approved in Notion. It lives outside `src/` and is not
 in the Lambda image.
 
 Everything under `evals/data/` is gitignored, because the golden set is your
-own Notion data and the repo is public. That covers the golden set, the
-answer cache and the reports.
+own Notion data and the repo is public. That covers the golden set, the tag
+vocabulary, the answer cache and the reports.
 
 ## Commands
 
@@ -36,9 +36,15 @@ this:
  "grounding": {"fetch_status": "success", "page_title": "...", "...": "..."}}
 ```
 
-`topics` are the Notion Tags minus the legacy type and intent values. The
-tag vocabulary Triage chooses from is the set of all `topics` in the file.
-Every run sees the same Grounding, so fetch time never counts toward latency.
+`topics` are the Notion Tags minus the legacy type and intent values. Every
+run sees the same Grounding, so fetch time never counts toward latency.
+
+The export also writes `vocabulary.json`, every Tags option of the Projects
+database in Notion's order (`NotionWriter.list_tag_options()`). That is the
+vocabulary production offers Triage, so the eval offers the same one; the
+tags that happen to appear in the golden set are fewer and would make
+tagging look easier. `mise run eval` stops with a pointer to
+`mise run eval:golden` when the file is missing.
 Notes are not kept in Notion, so `note` is empty and the priority question,
 which Triage asks only when there is a note, falls back to Medium.
 
@@ -84,9 +90,8 @@ treat differences under 5 points as noise.
 
 Reference numbers from the prototype run (`perplexity/pplx-decider-v1.3`,
 tuned, two-stage): type 78.8%, intent 78.8%, tag F1 0.36, revision applied
-94%, collateral 10%. The prototype chose tags from the full Notion Tags list
-(80 tags) rather than the golden set's tags, and its revision cases had no
-topics field, so its numbers are not exactly comparable.
+94%, collateral 10%. The prototype's revision cases had no topics field, so
+its revision numbers are not exactly comparable.
 
 ## Cost and time
 
