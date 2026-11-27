@@ -79,12 +79,13 @@ def _healthcheck() -> dict[str, Any]:
     """Prove the deployed image can do real work, and report its version.
 
     Invoked by the deploy workflow. The imports are deliberately eager: the
-    heavy agent and Notion modules are otherwise only loaded when a real update
-    arrives, so a broken image would first surface as a failed user message.
+    Triage, source reader and Notion modules are otherwise only loaded when a
+    real update arrives, so a broken image would first surface as a failed
+    user message.
     """
     from importlib.metadata import version
 
-    from backlog_tamer.agents.intake_triage import agent, workflow  # noqa: F401
+    from backlog_tamer import triage  # noqa: F401
     from backlog_tamer.integrations import source_reader  # noqa: F401
     from backlog_tamer.integrations.notion import NotionWriter
 
