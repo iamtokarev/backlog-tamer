@@ -800,3 +800,28 @@ def test_schema_report_names_the_capability_a_missing_source_column_disables():
 
     assert report.skipped_project_properties == ["Source"]
     assert report.degraded_capabilities == ["duplicate-detection"]
+
+
+def test_list_projects_follows_every_page_of_the_query():
+    class PagedClient(FakeClient):
+        async def post(self, url: str, *, headers, json) -> FakeResponse:
+            self.posts.append((url, json))
+            if "start_cursor" not in json:
+                return FakeResponse(
+                    {"results": [{"id": "a"}], "has_more": True, "next_cursor": "c1"}
+                )
+            return FakeResponse({"results": [{"id": "b"}], "has_more": False})
+
+    client = PagedClient()
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        tasks_database_id="tasks-db",
+        client=client,
+    )
+
+    pages = asyncio.run(writer.list_projects())
+
+    assert [page["id"] for page in pages] == ["a", "b"]
+    assert client.posts[0][0].endswith("/databases/projects-db/query")
+    assert client.posts[1][1]["start_cursor"] == "c1"

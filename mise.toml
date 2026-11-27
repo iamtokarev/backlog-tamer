@@ -51,6 +51,18 @@ description = "Run pytest, optionally with a file or filter"
 raw_args = true
 run = "uv run --locked pytest -q"
 
+[tasks."eval:golden"]
+description = "Export the eval golden set from Notion and read its sources"
+env = { PYTHONPATH = "src:." }
+raw_args = true
+run = "uv run --locked python -m evals.golden"
+
+[tasks.eval]
+description = "Measure Triage on the golden set (--stage, --model, --limit)"
+env = { PYTHONPATH = "src:." }
+raw_args = true
+run = "uv run --locked python -m evals.run"
+
 [tasks.unhide-venv]
 description = "Show .venv in Finder on macOS"
 run = "chflags -R nohidden .venv"
