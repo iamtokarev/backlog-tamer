@@ -1,6 +1,4 @@
-import os
 from functools import lru_cache
-from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,17 +6,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from backlog_tamer.integrations.telegram.config import TelegramConfig
 
 
-class AgentConfig(BaseSettings):
-    model: str = "openai/gpt-6-luna"
-    reasoning_effort: Literal["none", "low", "medium", "high"] = "medium"
-
-    model_config = SettingsConfigDict(extra="ignore")
-
-
 class TriageConfig(BaseSettings):
-    """Which engine drafts an Intake: the ADK agent, or the decision prototype."""
+    """The OpenRouter models Triage drafts and revises an Intake with.
 
-    engine: Literal["agent", "decision"] = "agent"
+    The decision model answers Triage's typed questions; the title model
+    writes the project name. Override with TRIAGE__DECISION_MODEL and
+    TRIAGE__TITLE_MODEL.
+    """
+
     # Pin a dated model: decision probabilities, and so thresholds, move
     # between versions. v1.3 is only listed as :free on OpenRouter for now.
     decision_model: str = "perplexity/pplx-decider-v1.3:free"
@@ -30,7 +25,6 @@ class TriageConfig(BaseSettings):
 class Settings(BaseSettings):
     openrouter_api_key: SecretStr
     browserbase_api_key: SecretStr
-    agent: AgentConfig = Field(default_factory=AgentConfig)
     triage: TriageConfig = Field(default_factory=TriageConfig)
     telegram: TelegramConfig
 
@@ -39,11 +33,6 @@ class Settings(BaseSettings):
     notion_projects_database_id: str
     notion_tasks_database_id: str
     notion_api_version: str = "2022-06-28"
-
-    langsmith_tracing: bool = True
-    langsmith_endpoint: str = "https://eu.api.smith.langchain.com"
-    langsmith_api_key: SecretStr | None = None
-    langsmith_project: str = "backlog-tamer"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -58,19 +47,6 @@ class Settings(BaseSettings):
         if not value.get_secret_value().strip():
             raise ValueError("Provider API key must not be blank.")
         return value
-
-    def export_to_env(self) -> None:
-        if self.langsmith_api_key is not None:
-            os.environ.setdefault(
-                "LANGSMITH_TRACING",
-                str(self.langsmith_tracing).lower(),
-            )
-            os.environ.setdefault(
-                "LANGSMITH_API_KEY",
-                self.langsmith_api_key.get_secret_value(),
-            )
-            os.environ.setdefault("LANGSMITH_ENDPOINT", self.langsmith_endpoint)
-            os.environ.setdefault("LANGSMITH_PROJECT", self.langsmith_project)
 
 
 @lru_cache(maxsize=1)

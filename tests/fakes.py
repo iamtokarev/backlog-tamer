@@ -7,10 +7,6 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from backlog_tamer.agents.intake_triage.triage_workflow import (
-    Checkpoint,
-    TurnOutcome,
-)
 from backlog_tamer.config import Settings
 from backlog_tamer.domain import (
     Grounding,
@@ -18,6 +14,7 @@ from backlog_tamer.domain import (
     ProjectDraft,
 )
 from backlog_tamer.integrations.notion import ExistingProject, NotionCommitResult
+from backlog_tamer.integrations.source_reader import FetchedUrl
 from backlog_tamer.integrations.telegram.config import TelegramConfig
 
 
@@ -34,83 +31,92 @@ def build_settings(database_url: str = "sqlite:///:memory:") -> Settings:
         database_url=database_url,
         notion_projects_database_id="test-projects-db",
         notion_tasks_database_id="test-tasks-db",
-        langsmith_tracing=False,
     )
 
 
 @dataclass
-class WorkflowCall:
+class TriageCall:
     operation: str
     args: dict[str, Any] = field(default_factory=dict)
 
 
-class ScriptedTriageWorkflow:
-    """Stands in for TriageWorkflow: returns queued Turn outcomes in order.
+class FakeTriage:
+    """Stands in for Triage: returns queued Drafts in order.
 
-    Every operation is recorded, so a test can check what the intake module
-    asked for (which decision, which Checkpoint, which kept fields) without
-    running ADK.
+    Every call is recorded with its arguments, so a test can check what the
+    intake module asked for (which context, Grounding, Draft and feedback)
+    without a model.
     """
 
-    def __init__(self, *outcomes: TurnOutcome):
-        self.outcomes = list(outcomes)
-        self.calls: list[WorkflowCall] = []
+    def __init__(self, *drafts: ProjectDraft):
+        self.drafts = list(drafts)
+        self.calls: list[TriageCall] = []
 
-    def queue(self, *outcomes: TurnOutcome) -> None:
-        self.outcomes.extend(outcomes)
+    def queue(self, *drafts: ProjectDraft) -> None:
+        self.drafts.extend(drafts)
 
-    async def start(
+    async def classify(
         self,
         context: IncomingContext,
-        user_id: str,
-        known_topics: list[str],
-    ) -> TurnOutcome:
+        grounding: Grounding,
+        vocabulary: list[str],
+    ) -> ProjectDraft:
         return self._next(
-            "start",
+            "classify",
             context=context,
-            user_id=user_id,
-            known_topics=known_topics,
+            grounding=grounding,
+            vocabulary=vocabulary,
         )
 
     async def revise(
         self,
-        checkpoint: Checkpoint,
+        context: IncomingContext,
+        grounding: Grounding,
+        draft: ProjectDraft,
         feedback: str,
-        kept_fields: dict[str, str],
-    ) -> TurnOutcome:
+        vocabulary: list[str],
+    ) -> ProjectDraft:
         return self._next(
             "revise",
-            checkpoint=checkpoint,
+            context=context,
+            grounding=grounding,
+            draft=draft,
             feedback=feedback,
-            kept_fields=kept_fields,
+            vocabulary=vocabulary,
         )
-
-    async def refetch(
-        self,
-        checkpoint: Checkpoint,
-        kept_fields: dict[str, str],
-    ) -> TurnOutcome:
-        return self._next(
-            "refetch",
-            checkpoint=checkpoint,
-            kept_fields=kept_fields,
-        )
-
-    async def approve(self, checkpoint: Checkpoint) -> TurnOutcome:
-        return self._next("approve", checkpoint=checkpoint)
-
-    async def reject(self, checkpoint: Checkpoint) -> TurnOutcome:
-        return self._next("reject", checkpoint=checkpoint)
 
     @property
     def operations(self) -> list[str]:
         return [call.operation for call in self.calls]
 
-    def _next(self, operation: str, **args: Any) -> TurnOutcome:
-        self.calls.append(WorkflowCall(operation, args))
-        if not self.outcomes:
-            raise AssertionError(f"No Turn outcome queued for {operation}.")
-        return self.outcomes.pop(0)
+    def _next(self, operation: str, **args: Any) -> ProjectDraft:
+        self.calls.append(TriageCall(operation, args))
+        if not self.drafts:
+            raise AssertionError(f"No Draft queued for {operation}.")
+        return self.drafts.pop(0)
+
+
+class FakeReader:
+    """Stands in for SourceReader: returns queued reads, then the last one again."""
+
+    def __init__(self, *fetched: FetchedUrl):
+        self.fetched = list(fetched)
+        self.urls: list[str] = []
+
+    def queue(self, *fetched: FetchedUrl) -> None:
+        self.fetched.extend(fetched)
+
+    @property
+    def reads(self) -> int:
+        return len(self.urls)
+
+    async def read(self, url: str) -> FetchedUrl:
+        self.urls.append(url)
+        if len(self.fetched) > 1:
+            return self.fetched.pop(0)
+        if self.fetched:
+            return self.fetched[0]
+        return FetchedUrl(status="success", requested_url=url)
 
 
 class FakeNotionWriter:

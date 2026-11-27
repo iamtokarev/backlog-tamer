@@ -7,14 +7,8 @@ from sqlalchemy import DateTime, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 from backlog_tamer.database_urls import to_sync_database_url, uses_external_pooler
-from backlog_tamer.domain import (
-    LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE,
-    Grounding,
-    IncomingContext,
-    ProjectDraft,
-)
+from backlog_tamer.domain import Grounding, IncomingContext, ProjectDraft
 
 from .models import ConfirmationRecord, ConfirmationStatus, ManualEdit
 
@@ -34,13 +28,9 @@ class ConfirmationRow(Base):
     user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     chat_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    session_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    invocation_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    request_input_call_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     incoming_context_json: Mapped[str] = mapped_column(Text, nullable=False)
     draft_proposal_json: Mapped[str] = mapped_column(Text, nullable=False)
-    review_message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -59,6 +49,13 @@ class ConfirmationRow(Base):
     manual_edits_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     grounding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     notion_task_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Legacy (ADK) columns: kept for rollback to v0.8.0, dropped in decision-triage/09.
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    invocation_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    request_input_call_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=""
+    )
+    review_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class ConfirmationStore:
@@ -80,25 +77,18 @@ class ConfirmationStore:
             row = session.get(ConfirmationRow, confirmation_id)
             return self._record_from_row(row) if row is not None else None
 
-    def update_after_resume(
+    def update_draft(
         self,
-        *,
         confirmation_id: str,
-        draft_proposal: ProjectDraft,
-        checkpoint: Checkpoint,
-        review_message: str,
+        draft: ProjectDraft,
         grounding: Grounding | None = None,
     ) -> None:
+        """Replace the Draft (and Grounding, when given); Quick edits stay."""
         with self.session_factory.begin() as session:
             row = self._get_required_row(session, confirmation_id)
-            row.draft_proposal_json = draft_proposal.model_dump_json()
+            row.draft_proposal_json = draft.model_dump_json()
             if grounding is not None:
                 row.grounding_json = grounding.model_dump_json()
-            row.session_id = checkpoint.session_id
-            row.invocation_id = checkpoint.invocation_id
-            row.request_input_call_id = checkpoint.request_input_call_id
-            row.review_message = review_message
-            row.manual_edits_json = None
             row.updated_at = utc_now()
 
     def apply_manual_edit(
@@ -254,13 +244,9 @@ class ConfirmationStore:
             user_id=record.user_id,
             chat_id=record.chat_id,
             source_message_id=record.source_message_id,
-            session_id=record.checkpoint.session_id,
-            invocation_id=record.checkpoint.invocation_id,
-            request_input_call_id=record.checkpoint.request_input_call_id,
             status=record.status.value,
             incoming_context_json=record.incoming_context.model_dump_json(),
             draft_proposal_json=record.draft_proposal.model_dump_json(),
-            review_message=record.review_message,
             created_at=record.created_at,
             updated_at=record.updated_at,
             resolved_at=record.resolved_at,
@@ -282,18 +268,11 @@ class ConfirmationStore:
             user_id=row.user_id,
             chat_id=row.chat_id,
             source_message_id=row.source_message_id,
-            checkpoint=Checkpoint(
-                user_id=row.user_id,
-                session_id=row.session_id,
-                invocation_id=row.invocation_id,
-                request_input_call_id=row.request_input_call_id,
-            ),
             status=ConfirmationStatus(row.status),
             incoming_context=IncomingContext.model_validate_json(
                 row.incoming_context_json
             ),
             draft_proposal=ProjectDraft.model_validate_json(row.draft_proposal_json),
-            review_message=row.review_message,
             created_at=row.created_at,
             updated_at=row.updated_at,
             resolved_at=row.resolved_at,
@@ -369,22 +348,7 @@ def _load_manual_edits(raw: str | None) -> dict[str, ManualEdit]:
             edits[str(key)] = ManualEdit.coerce(value)
         except (TypeError, ValueError):
             continue
-
-    legacy_type = edits.pop("resource_type", None)
-    if legacy_type is not None and "project_type" not in edits:
-        edits["project_type"] = legacy_type.model_copy(
-            update={
-                "before": _migrated_project_type(legacy_type.before),
-                "after": _migrated_project_type(legacy_type.after),
-            }
-        )
     return edits
-
-
-def _migrated_project_type(value: str) -> str:
-    if not value:
-        return value
-    return LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE.get(value, value)
 
 
 def _dump_manual_edits(edits: dict[str, ManualEdit]) -> str:

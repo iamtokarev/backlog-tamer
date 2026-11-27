@@ -2,17 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-from backlog_tamer.agents.intake_triage.triage_workflow import (
-    Approved,
-    NeedsReview,
-    Rejected,
-    TriageEngine,
-    TriageWorkflow,
-    TurnOutcome,
-)
 from backlog_tamer.config import Settings, get_settings
 from backlog_tamer.domain import (
     Grounding,
@@ -20,6 +11,8 @@ from backlog_tamer.domain import (
     ProjectDraft,
 )
 from backlog_tamer.integrations.notion import NotionWriter
+from backlog_tamer.integrations.source_reader import SourceReader
+from backlog_tamer.triage import Triage
 
 from .confirmation_store import ConfirmationStore, utc_now
 from .models import (
@@ -48,14 +41,12 @@ def _needs_review(
     confirmation_id: str,
     draft: ProjectDraft,
     grounding: Grounding,
-    review_message: str,
 ) -> IntakeResult:
     return IntakeResult(
         status="needs_review",
         confirmation_id=confirmation_id,
         draft_proposal=draft,
         grounding=grounding,
-        review_message=review_message,
     )
 
 
@@ -65,14 +56,12 @@ def _review_result(confirmation: ConfirmationRecord) -> IntakeResult:
             confirmation.confirmation_id,
             confirmation.draft_proposal,
             confirmation.grounding,
-            confirmation.review_message,
         )
     return IntakeResult(
         status=confirmation.status.value,
         confirmation_id=confirmation.confirmation_id,
         draft_proposal=confirmation.draft_proposal,
         grounding=confirmation.grounding,
-        review_message=confirmation.review_message,
         notion_project_url=confirmation.notion_project_url,
     )
 
@@ -102,28 +91,25 @@ def _log_corrections(confirmation: ConfirmationRecord) -> None:
     )
 
 
-def _engine_from_settings(settings: Settings, database_url: str) -> TriageEngine:
-    return TriageWorkflow.from_settings(settings, database_url)
-
-
 class IntakeService:
     def __init__(
         self,
         *,
+        settings: Settings | None = None,
         database_url: str | None = None,
         store: ConfirmationStore | None = None,
-        settings: Settings | None = None,
+        triage: Triage | None = None,
+        reader: SourceReader | None = None,
         notion_writer: NotionWriter | None = None,
-        workflow: TriageEngine | None = None,
     ):
         self.settings = settings or get_settings()
         self.database_url = database_url or self.settings.database_url
         self.store = store or ConfirmationStore(self.database_url)
-        self.notion_writer = notion_writer
-        self.workflow = workflow or _engine_from_settings(
-            self.settings,
-            self.database_url,
+        self.triage = triage or Triage.from_settings(self.settings)
+        self.reader = reader or SourceReader.from_api_key(
+            self.settings.browserbase_api_key.get_secret_value()
         )
+        self.notion_writer = notion_writer
 
     async def start_intake(
         self,
@@ -132,37 +118,26 @@ class IntakeService:
         chat_id: str | None = None,
         source_message_id: str | None = None,
     ) -> IntakeResult:
-        outcome = await self.workflow.start(
-            context,
-            user_id,
-            await self._known_topics(),
+        grounding = await self._read(context)
+        draft = await self.triage.classify(
+            context, grounding, await self._known_topics()
         )
-        if not isinstance(outcome, NeedsReview):
-            raise RuntimeError(
-                f"A new Triage ended without a Draft to review: {outcome!r}",
-            )
 
+        now = utc_now()
         confirmation = ConfirmationRecord(
             confirmation_id=str(uuid4()),
             user_id=user_id,
             chat_id=chat_id,
             source_message_id=source_message_id,
-            checkpoint=outcome.checkpoint,
             status=ConfirmationStatus.PENDING_REVIEW,
             incoming_context=context,
-            draft_proposal=outcome.draft,
-            grounding=outcome.grounding,
-            review_message=outcome.review_message,
-            created_at=utc_now(),
-            updated_at=utc_now(),
+            draft_proposal=draft,
+            grounding=grounding,
+            created_at=now,
+            updated_at=now,
         )
         self.store.create_pending(confirmation)
-        return _needs_review(
-            confirmation.confirmation_id,
-            outcome.draft,
-            outcome.grounding,
-            outcome.review_message,
-        )
+        return _needs_review(confirmation.confirmation_id, draft, grounding)
 
     def get_review(self, confirmation_id: str) -> IntakeResult | None:
         """The Draft as it stands now, or None for an unknown Confirmation."""
@@ -177,7 +152,7 @@ class IntakeService:
         field: str,
         value: str,
     ) -> IntakeResult:
-        """Set one Draft field directly; the next Revision keeps it.
+        """Set one Draft field directly; it lasts for the rest of the Review.
 
         Raises ValueError for an unknown Confirmation or a finished Review.
         """
@@ -189,43 +164,56 @@ class IntakeService:
         return _review_result(confirmation)
 
     async def approve(self, confirmation_id: str) -> IntakeResult:
-        return await self._resume(
-            confirmation_id,
-            lambda confirmation: self.workflow.approve(confirmation.checkpoint),
-        )
+        pending = self._pending(confirmation_id)
+        if isinstance(pending, IntakeResult):
+            return pending
+        return await self.finalize_approval(confirmation_id)
 
     async def reject(self, confirmation_id: str) -> IntakeResult:
-        return await self._resume(
-            confirmation_id,
-            lambda confirmation: self.workflow.reject(confirmation.checkpoint),
+        pending = self._pending(confirmation_id)
+        if isinstance(pending, IntakeResult):
+            return pending
+        self.store.mark_rejected(confirmation_id)
+        return IntakeResult(
+            status=ConfirmationStatus.REJECTED.value,
+            confirmation_id=confirmation_id,
+            draft_proposal=pending.draft_proposal,
         )
 
     async def revise(self, confirmation_id: str, feedback: str) -> IntakeResult:
-        """Send the Draft back to the agent with the user's Revision."""
-        return await self._resume(
-            confirmation_id,
-            lambda confirmation: self.workflow.revise(
-                confirmation.checkpoint,
-                feedback,
-                confirmation.kept_fields,
-            ),
+        """Re-decide the fields the user's Revision is about."""
+        pending = self._pending(confirmation_id)
+        if isinstance(pending, IntakeResult):
+            return pending
+        revised = await self.triage.revise(
+            pending.incoming_context,
+            pending.grounding,
+            pending.draft_proposal,
+            feedback,
+            await self._known_topics(),
         )
+        draft = revised.with_edits(pending.kept_fields)
+        self.store.update_draft(confirmation_id, draft)
+        return _needs_review(confirmation_id, draft, pending.grounding)
 
     async def refetch(self, confirmation_id: str) -> IntakeResult:
         """Redraft after a failed page fetch, from a fresh read of the page."""
-        return await self._resume(
-            confirmation_id,
-            lambda confirmation: self.workflow.refetch(
-                confirmation.checkpoint,
-                confirmation.kept_fields,
-            ),
+        pending = self._pending(confirmation_id)
+        if isinstance(pending, IntakeResult):
+            return pending
+        grounding = await self._read(pending.incoming_context)
+        classified = await self.triage.classify(
+            pending.incoming_context, grounding, await self._known_topics()
         )
+        draft = classified.with_edits(pending.kept_fields)
+        self.store.update_draft(confirmation_id, draft, grounding)
+        return _needs_review(confirmation_id, draft, grounding)
 
-    async def _resume(
-        self,
-        confirmation_id: str,
-        turn: Callable[[ConfirmationRecord], Awaitable[TurnOutcome]],
-    ) -> IntakeResult:
+    def _pending(self, confirmation_id: str) -> ConfirmationRecord | IntakeResult:
+        """The Confirmation under Review, or the result of one already ended.
+
+        Raises ValueError for an unknown Confirmation.
+        """
         confirmation = self.store.get(confirmation_id)
         if confirmation is None:
             raise ValueError(f"Unknown confirmation_id: {confirmation_id}")
@@ -236,39 +224,14 @@ class IntakeService:
                 draft_proposal=confirmation.draft_proposal,
                 notion_project_url=confirmation.notion_project_url,
             )
-        if confirmation.status is not ConfirmationStatus.PENDING_REVIEW:
-            raise ValueError(
-                "Confirmation "
-                f"{confirmation_id} is not pending review: "
-                f"{confirmation.status.value}",
-            )
+        return confirmation
 
-        outcome = await turn(confirmation)
-        match outcome:
-            case NeedsReview():
-                self.store.update_after_resume(
-                    confirmation_id=confirmation_id,
-                    draft_proposal=outcome.draft,
-                    checkpoint=outcome.checkpoint,
-                    review_message=outcome.review_message,
-                    grounding=outcome.grounding,
-                )
-                return _needs_review(
-                    confirmation_id,
-                    outcome.draft,
-                    outcome.grounding,
-                    outcome.review_message,
-                )
-            case Approved():
-                return await self.finalize_approval(confirmation_id)
-            case Rejected():
-                self.store.mark_rejected(confirmation_id)
-                return IntakeResult(
-                    status=ConfirmationStatus.REJECTED.value,
-                    confirmation_id=confirmation_id,
-                    draft_proposal=outcome.draft or confirmation.draft_proposal,
-                )
-        raise RuntimeError(f"Unknown Turn outcome: {outcome!r}")
+    async def _read(self, context: IncomingContext) -> Grounding:
+        """Grounding for the Intake's first link; a failed read is an error one."""
+        if not context.links:
+            return Grounding(fetch_status="skipped")
+        fetched = await self.reader.read(str(context.links[0].url))
+        return fetched.to_grounding()
 
     async def finalize_approval(self, confirmation_id: str) -> IntakeResult:
         confirmation, acquired = self.store.mark_committing_once(confirmation_id)

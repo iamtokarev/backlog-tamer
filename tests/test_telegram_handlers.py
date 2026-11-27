@@ -1,7 +1,7 @@
 """The Telegram handlers driven the way the user drives them: send, then press.
 
 Telegram is faked down to the few calls the handlers make; the intake module
-behind them is real, with the Triage turns scripted and Notion faked.
+behind them is real, with Triage, the source reader and Notion faked.
 """
 
 from __future__ import annotations
@@ -13,19 +13,14 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fakes import FakeNotionWriter, ScriptedTriageWorkflow, build_settings
+from fakes import FakeNotionWriter, FakeReader, FakeTriage, build_settings
 from telegram import ForceReply, MessageEntity
 
-from backlog_tamer.agents.intake_triage.triage_workflow import (
-    Approved,
-    Checkpoint,
-    NeedsReview,
-    Rejected,
-)
 from backlog_tamer.application.confirmation_store import ConfirmationStore
 from backlog_tamer.application.intake_service import IntakeService
-from backlog_tamer.domain import Grounding, ProjectDraft
+from backlog_tamer.domain import ProjectDraft
 from backlog_tamer.integrations.notion import ExistingProject
+from backlog_tamer.integrations.source_reader import FetchedUrl
 from backlog_tamer.integrations.telegram.callbacks import (
     Action,
     ConfirmationAction,
@@ -65,22 +60,7 @@ def _draft(**overrides) -> ProjectDraft:
     return ProjectDraft(**payload)
 
 
-def _needs_review(
-    draft: ProjectDraft | None = None,
-    grounding: Grounding | None = None,
-    turn: int = 1,
-) -> NeedsReview:
-    return NeedsReview(
-        draft=draft or _draft(),
-        grounding=grounding or Grounding(fetch_status="success"),
-        review_message="Review the proposed draft.",
-        checkpoint=Checkpoint(
-            user_id=str(ALLOWED_USER_ID),
-            session_id="session-1",
-            invocation_id=f"invocation-{turn}",
-            request_input_call_id=f"call-{turn}",
-        ),
-    )
+FAILED_FETCH = FetchedUrl(status="error", requested_url=SOURCE_URL, error="HTTP 503")
 
 
 class FakeMessage:
@@ -160,15 +140,21 @@ class Chat:
     """One chat between the allowed user and the bot."""
 
     def __init__(
-        self, tmp_path: Path, *outcomes, writer: FakeNotionWriter | None = None
+        self,
+        tmp_path: Path,
+        *drafts: ProjectDraft,
+        reads: tuple[FetchedUrl, ...] = (),
+        writer: FakeNotionWriter | None = None,
     ):
-        self.workflow = ScriptedTriageWorkflow(*outcomes)
+        self.triage = FakeTriage(*drafts)
+        self.reader = FakeReader(*reads)
         self.writer = writer or FakeNotionWriter()
         self.service = IntakeService(
             settings=build_settings(),
             store=ConfirmationStore(f"sqlite:///{tmp_path / 'confirmations.db'}"),
             notion_writer=self.writer,
-            workflow=self.workflow,
+            triage=self.triage,
+            reader=self.reader,
         )
         self.context = SimpleNamespace(
             bot_data={
@@ -234,7 +220,7 @@ class Chat:
 
 
 def test_a_sent_link_becomes_a_review_card(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review())
+    chat = Chat(tmp_path, _draft())
 
     chat.send_link()
 
@@ -249,14 +235,14 @@ def test_a_sent_link_becomes_a_review_card(tmp_path: Path):
         "🛠️ tool ▸",
         "📝 Revise with a note",
     ]
-    assert chat.workflow.operations == ["start"]
+    assert chat.triage.operations == ["classify"]
 
 
 def test_revision_feedback_redrafts_and_names_what_changed(tmp_path: Path):
     chat = Chat(
         tmp_path,
-        _needs_review(),
-        _needs_review(_draft(priority="Low", tasks=["Read", "Build"]), turn=2),
+        _draft(),
+        _draft(priority="Low", tasks=["Read", "Build"]),
     )
     chat.send_link()
     card = chat.last
@@ -276,17 +262,15 @@ def test_revision_feedback_redrafts_and_names_what_changed(tmp_path: Path):
         "✏️ <i>Changed: priority High → Low · tasks 1 → 2</i>"
     )
     assert "🔻 Low ▸" in revised.buttons
-    assert chat.workflow.operations == ["start", "revise"]
-    assert (
-        chat.workflow.calls[-1].args["feedback"] == "not urgent, and add a build task"
-    )
+    assert chat.triage.operations == ["classify", "revise"]
+    assert chat.triage.calls[-1].args["feedback"] == "not urgent, and add a build task"
 
 
 def test_a_revision_retires_the_card_it_started_from(tmp_path: Path):
     chat = Chat(
         tmp_path,
-        _needs_review(),
-        _needs_review(_draft(priority="Low"), turn=2),
+        _draft(),
+        _draft(priority="Low"),
     )
     chat.send_link()
     card = chat.last
@@ -302,7 +286,7 @@ def test_a_revision_retires_the_card_it_started_from(tmp_path: Path):
 
 
 def test_empty_revision_feedback_leaves_the_card_waiting(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
     chat.press(card, "Revise")
@@ -315,8 +299,8 @@ def test_empty_revision_feedback_leaves_the_card_waiting(tmp_path: Path):
 def test_empty_revision_feedback_asks_again_and_keeps_waiting(tmp_path: Path):
     chat = Chat(
         tmp_path,
-        _needs_review(),
-        _needs_review(_draft(priority="Low"), turn=2),
+        _draft(),
+        _draft(priority="Low"),
     )
     chat.send_link()
     chat.press(chat.last, "Revise")
@@ -325,13 +309,13 @@ def test_empty_revision_feedback_asks_again_and_keeps_waiting(tmp_path: Path):
 
     assert chat.last.text == "Please send the revision feedback as text."
     chat.send("lower priority")
-    assert chat.workflow.operations == ["start", "revise"]
+    assert chat.triage.operations == ["classify", "revise"]
 
 
 def test_cancelled_revision_restores_the_card_and_frees_the_next_message(
     tmp_path: Path,
 ):
-    chat = Chat(tmp_path, _needs_review(), _needs_review(_draft(), turn=2))
+    chat = Chat(tmp_path, _draft(), _draft())
     chat.send_link()
     card = chat.last
     chat.press(card, "Revise")
@@ -341,11 +325,11 @@ def test_cancelled_revision_restores_the_card_and_frees_the_next_message(
     assert query.answers == ["Revision cancelled."]
     assert "✅ Approve & save" in card.buttons
     chat.send_link("https://example.com/another")
-    assert chat.workflow.operations == ["start", "start"]
+    assert chat.triage.operations == ["classify", "classify"]
 
 
 def test_a_redraft_that_changes_nothing_has_no_change_line(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review(), _needs_review(turn=2))
+    chat = Chat(tmp_path, _draft(), _draft())
     chat.send_link()
     chat.press(chat.last, "Revise")
 
@@ -354,20 +338,8 @@ def test_a_redraft_that_changes_nothing_has_no_change_line(tmp_path: Path):
     assert chat.last.text.startswith("<b>LangGraph")
 
 
-def test_a_revision_the_agent_ends_with_approval_saves_it(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review(), Approved())
-    chat.send_link()
-    chat.press(chat.last, "Revise")
-
-    chat.send("perfect, save it")
-
-    assert chat.last.text.startswith("✅ <b>Saved to Notion</b>")
-    assert chat.last.buttons == ["↗️ Open in Notion", "↩️ Undo"]
-    assert len(chat.writer.calls) == 1
-
-
 def test_cancel_without_a_chat_still_restores_the_card(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
     chat.press(card, "Revise")
@@ -378,7 +350,7 @@ def test_cancel_without_a_chat_still_restores_the_card(tmp_path: Path):
 
 
 def test_quick_edit_sets_a_field_without_the_agent(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
 
@@ -393,11 +365,11 @@ def test_quick_edit_sets_a_field_without_the_agent(tmp_path: Path):
     assert chat.service.get_review(_confirmation_id(card)).draft_proposal.priority == (
         "Low"
     )
-    assert chat.workflow.operations == ["start"]
+    assert chat.triage.operations == ["classify"]
 
 
 def test_back_from_a_picker_restores_the_review_keyboard(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
     text_before = card.text
@@ -413,7 +385,7 @@ def test_back_from_a_picker_restores_the_review_keyboard(tmp_path: Path):
 
 
 def test_approve_saves_to_notion_and_leaves_a_terminal_card(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review(), Approved())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
 
@@ -428,7 +400,7 @@ def test_approve_saves_to_notion_and_leaves_a_terminal_card(tmp_path: Path):
 
 
 def test_undo_archives_what_the_commit_created(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review(), Approved())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
     chat.press(card, "Approve")
@@ -442,7 +414,7 @@ def test_undo_archives_what_the_commit_created(tmp_path: Path):
 
 
 def test_reject_closes_the_review_without_writing(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review(), Rejected(draft=None))
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
 
@@ -454,9 +426,7 @@ def test_reject_closes_the_review_without_writing(tmp_path: Path):
 
 
 def test_a_failed_save_can_be_retried(tmp_path: Path):
-    chat = Chat(
-        tmp_path, _needs_review(), Approved(), writer=FakeNotionWriter(fail=True)
-    )
+    chat = Chat(tmp_path, _draft(), writer=FakeNotionWriter(fail=True))
     chat.send_link()
     card = chat.last
     chat.press(card, "Approve")
@@ -469,7 +439,7 @@ def test_a_failed_save_can_be_retried(tmp_path: Path):
 
     assert card.shown[-2] == "⏳ Saving to Notion…"
     assert card.text.startswith("✅ <b>Saved to Notion</b>")
-    assert chat.workflow.operations == ["start", "approve"]
+    assert chat.triage.operations == ["classify"]
 
 
 def test_a_duplicate_link_can_add_its_task_to_the_existing_project(tmp_path: Path):
@@ -479,7 +449,7 @@ def test_a_duplicate_link_can_add_its_task_to_the_existing_project(tmp_path: Pat
         page_url="https://notion.so/existing-id",
         created_time="2026-09-01T10:00:00.000Z",
     )
-    chat = Chat(tmp_path, _needs_review(), Approved(), writer=writer)
+    chat = Chat(tmp_path, _draft(), writer=writer)
     chat.send_link()
     card = chat.last
     chat.press(card, "Approve")
@@ -497,7 +467,7 @@ def test_a_duplicate_link_can_add_its_task_to_the_existing_project(tmp_path: Pat
 
 
 def test_a_failed_draft_says_so(tmp_path: Path):
-    chat = Chat(tmp_path)  # no Turn outcome queued: the Triage turn fails
+    chat = Chat(tmp_path)  # no Draft queued: Triage fails
 
     chat.send_link()
 
@@ -505,11 +475,11 @@ def test_a_failed_draft_says_so(tmp_path: Path):
 
 
 def test_retry_fetch_redrafts_from_a_fresh_read_of_the_page(tmp_path: Path):
-    failed_fetch = Grounding(fetch_status="error", fetch_error="HTTP 503")
     chat = Chat(
         tmp_path,
-        _needs_review(grounding=failed_fetch),
-        _needs_review(_draft(project_name="LangGraph overview"), turn=2),
+        _draft(),
+        _draft(project_name="LangGraph overview"),
+        reads=(FAILED_FETCH, FetchedUrl(status="success", requested_url=SOURCE_URL)),
     )
     chat.send_link()
     card = chat.last
@@ -521,14 +491,13 @@ def test_retry_fetch_redrafts_from_a_fresh_read_of_the_page(tmp_path: Path):
     assert card.text.startswith("<b>LangGraph overview</b>")
     assert "Couldn't open the page" not in card.text
     assert "🔁 Retry fetch" not in card.buttons
-    assert chat.workflow.operations == ["start", "refetch"]
+    assert chat.triage.operations == ["classify", "classify"]
 
 
 def test_a_stale_button_after_the_review_closed_shows_where_it_ended(
     tmp_path: Path,
 ):
-    failed_fetch = Grounding(fetch_status="error", fetch_error="HTTP 503")
-    chat = Chat(tmp_path, _needs_review(grounding=failed_fetch), Rejected(draft=None))
+    chat = Chat(tmp_path, _draft(), reads=(FAILED_FETCH,))
     chat.send_link()
     card = chat.last
     retry_fetch = card.callback_data("Retry fetch")
@@ -537,7 +506,7 @@ def test_a_stale_button_after_the_review_closed_shows_where_it_ended(
     chat.press_data(card, retry_fetch)
 
     assert card.text.startswith("❌ <b>Rejected</b>")
-    assert chat.workflow.operations == ["start", "reject"]
+    assert chat.triage.operations == ["classify"]
 
 
 @pytest.mark.parametrize("action", list(Action))
@@ -548,7 +517,7 @@ def test_an_unknown_confirmation_asks_for_the_item_again(tmp_path: Path, action)
     chat.press_data(card, encode_callback(ConfirmationAction(action, str(uuid4()))))
 
     assert card.text == UNKNOWN_CONFIRMATION_REPLY
-    assert chat.workflow.operations == []
+    assert chat.triage.operations == []
 
 
 def test_a_quick_edit_on_an_unknown_confirmation_asks_for_the_item_again(
@@ -562,24 +531,24 @@ def test_a_quick_edit_on_an_unknown_confirmation_asks_for_the_item_again(
     assert card.text == UNKNOWN_CONFIRMATION_REPLY
 
 
-def test_an_unexpected_failure_keeps_the_draft_open(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review())  # nothing queued for the approval
+def test_an_unexpected_failure_keeps_the_draft_open(tmp_path: Path, monkeypatch):
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
-
-    chat.press(card, "Approve")
+    store = chat.service.store
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "mark_committing_once", lambda _id: 1 / 0, raising=True)
+        chat.press(card, "Approve")
 
     assert card.text.startswith(REVIEW_ERROR_REPLY)
     assert "<b>LangGraph: build stateful multi-agent workflows</b>" in card.text
     assert "✅ Approve & save" in card.buttons
-    chat.workflow.queue(Approved())
     chat.press(card, "Approve")
     assert card.text.startswith("✅ <b>Saved to Notion</b>")
 
 
 def test_an_unexpected_refetch_failure_keeps_the_draft_open(tmp_path: Path):
-    failed_fetch = Grounding(fetch_status="error", fetch_error="HTTP 503")
-    chat = Chat(tmp_path, _needs_review(grounding=failed_fetch))
+    chat = Chat(tmp_path, _draft(), reads=(FAILED_FETCH,))
     chat.send_link()
     card = chat.last
 
@@ -591,7 +560,7 @@ def test_an_unexpected_refetch_failure_keeps_the_draft_open(tmp_path: Path):
 
 
 def test_an_unexpected_revision_failure_keeps_the_draft_open(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review())  # nothing queued for the Revision
+    chat = Chat(tmp_path, _draft())  # no Draft queued for the Revision
     chat.send_link()
     chat.press(chat.last, "Revise")
 
@@ -600,13 +569,12 @@ def test_an_unexpected_revision_failure_keeps_the_draft_open(tmp_path: Path):
     reply = chat.last
     assert reply.text.startswith(REVIEW_ERROR_REPLY)
     assert "📝 Revise with a note" in reply.buttons
-    chat.workflow.queue(Approved())
     chat.press(reply, "Approve")
     assert reply.text.startswith("✅ <b>Saved to Notion</b>")
 
 
 def test_another_user_cannot_press_the_buttons(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review(), Approved())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
     text_before, buttons_before = card.text, card.buttons
@@ -615,7 +583,7 @@ def test_another_user_cannot_press_the_buttons(tmp_path: Path):
 
     assert query.answers == [None]
     assert (card.text, card.buttons) == (text_before, buttons_before)
-    assert chat.workflow.operations == ["start"]
+    assert chat.triage.operations == ["classify"]
     assert chat.writer.calls == []
 
 
@@ -624,7 +592,7 @@ def test_another_user_cannot_press_the_buttons(tmp_path: Path):
     ["launch:0b6f1c1e", "approve", "edit:x:0b6f1c1e", "pick:p:0b6f1c1e"],
 )
 def test_malformed_callback_data_is_answered_and_ignored(tmp_path: Path, data):
-    chat = Chat(tmp_path, _needs_review())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
     text_before, buttons_before = card.text, card.buttons
@@ -646,7 +614,7 @@ def test_a_callback_without_data_is_left_alone(tmp_path: Path):
 
 
 def test_revise_needs_a_chat_to_wait_in(tmp_path: Path):
-    chat = Chat(tmp_path, _needs_review())
+    chat = Chat(tmp_path, _draft())
     chat.send_link()
     card = chat.last
     buttons_before = card.buttons
