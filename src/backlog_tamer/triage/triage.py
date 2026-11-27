@@ -45,6 +45,10 @@ class Triage:
             )
         )
 
+    async def probe(self) -> None:
+        """Raise unless both configured models answer; see DecisionClient.probe."""
+        await self._client.probe()
+
     async def classify(
         self,
         context: IncomingContext,

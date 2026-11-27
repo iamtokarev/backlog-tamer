@@ -146,6 +146,30 @@ class DecisionClient:
         payload = json.loads(body["choices"][0]["message"]["content"])
         return payload["project_name"].strip()
 
+    async def probe(self) -> None:
+        """Call both models once; raise if either can't answer.
+
+        Catches a retired slug, a typo or a bad key at deploy time instead of
+        on the first real capture.
+        """
+        answers = await self.decide(
+            {"text": "healthcheck"},
+            {
+                "ok": {
+                    "type": "noul",
+                    "instructions": "Is this a healthcheck?",
+                    "criteria": {"true": "yes", "false": "no"},
+                }
+            },
+        )
+        if (answers.get("ok") or {}).get("type") != "noul":
+            raise RuntimeError(
+                f"Decision model {self.decision_model} returned no 'ok' answer: "
+                f"{answers!r}"
+            )
+        if not await self.title({"title": "healthcheck"}):
+            raise RuntimeError(f"Title model {self.title_model} returned no title.")
+
     async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             for attempt in range(MAX_ATTEMPTS):

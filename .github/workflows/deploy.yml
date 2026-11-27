@@ -161,6 +161,7 @@ jobs:
             echo "::error::Deployed worker reports version '$actual', expected '$expected'"
             exit 1
           fi
+          jq -e '.models.decision and .models.title' worker-health.json > /dev/null || { echo "::error::Worker healthcheck did not report its models"; exit 1; }
           echo "Worker is healthy and running $actual."
 
       # The webhook Lambda sits behind an unauthenticated Function URL, so the
