@@ -25,7 +25,6 @@ REQUIRED_SETTINGS_ENV = {
     "TELEGRAM__ALLOWED_USER_ID": "42",
     "NOTION_TOKEN": "test-notion-token",
     "NOTION_PROJECTS_DATABASE_ID": "test-projects-db",
-    "NOTION_TASKS_DATABASE_ID": "test-tasks-db",
 }
 
 
@@ -47,7 +46,6 @@ def healthcheck_env(monkeypatch, tmp_path):
     async def healthy_schema(self):
         return NotionSchemaReport(
             missing_project_properties=[],
-            missing_task_properties=[],
             skipped_project_properties=[],
         )
 
@@ -217,7 +215,6 @@ def test_worker_handler_healthcheck_reports_a_degraded_capability(
     async def degraded_schema(self):
         return NotionSchemaReport(
             missing_project_properties=[],
-            missing_task_properties=[],
             skipped_project_properties=["Source"],
             degraded_capabilities=["duplicate-detection"],
         )

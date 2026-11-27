@@ -34,14 +34,6 @@ ALL_PROJECT_PROPERTIES = {
     "Captured",
     "Summary",
 }
-ALL_TASK_PROPERTIES = {
-    "Task name",
-    "Status",
-    "Priority",
-    "Projects",
-    "Due",
-    "Source",
-}
 
 
 class FakeClient:
@@ -50,24 +42,18 @@ class FakeClient:
     def __init__(
         self,
         project_properties: set[str] | None = None,
-        task_properties: set[str] | None = None,
     ):
         self.posts: list[tuple[str, dict[str, Any]]] = []
         self.gets: list[str] = []
         self.project_properties = (
             ALL_PROJECT_PROPERTIES if project_properties is None else project_properties
         )
-        self.task_properties = (
-            ALL_TASK_PROPERTIES if task_properties is None else task_properties
-        )
         self.open_requests = 0
         self.max_concurrent_requests = 0
 
     async def get(self, url: str, *, headers) -> FakeResponse:
         self.gets.append(url)
-        names = (
-            self.project_properties if "projects-db" in url else self.task_properties
-        )
+        names = self.project_properties if "projects-db" in url else set()
         return FakeResponse({"properties": {name: {} for name in names}})
 
     async def post(self, url: str, *, headers, json) -> FakeResponse:
@@ -93,12 +79,10 @@ def test_builds_project_payload_with_summary_source_and_fixed_properties():
         intent="learn",
         priority="Medium",
         source_url="https://example.com/adk",
-        tasks=["Read docs", "Sketch integration"],
     )
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
 
     payload = writer.build_project_payload(draft, captured_at=date(2026, 7, 26))
@@ -117,7 +101,8 @@ def test_builds_project_payload_with_summary_source_and_fixed_properties():
     assert properties["Intent"] == {"select": {"name": "learn"}}
     assert properties["Source"] == {"url": "https://example.com/adk"}
     assert properties["Captured"] == {"date": {"start": "2026-07-26"}}
-    assert properties["Tags"] == {"multi_select": [{"name": "tool"}, {"name": "learn"}]}
+    # No type/intent fallback: those are their own properties now.
+    assert properties["Tags"] == {"multi_select": []}
 
 
 def test_summary_property_carries_only_the_summary():
@@ -128,12 +113,10 @@ def test_summary_property_carries_only_the_summary():
         intent="learn",
         priority="Medium",
         source_url="https://example.com/adk",
-        tasks=["Read docs"],
     )
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
 
     summary = writer.build_project_payload(draft)["properties"]["Summary"]
@@ -151,45 +134,19 @@ def test_project_payload_omits_source_when_the_draft_has_none():
         project_type="product",
         intent="build",
         priority="Low",
-        tasks=["Sketch"],
     )
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
 
     assert "Source" not in writer.build_project_payload(draft)["properties"]
-
-
-def test_builds_project_payload_normalizes_low_signal_tags():
-    draft = ProjectDraft(
-        project_name="Mystery item",
-        summary="Figure out what this is.",
-        project_type="product",
-        intent="unclear",
-        priority="Low",
-        tasks=["Review item"],
-    )
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-    )
-
-    payload = writer.build_project_payload(draft)
-
-    assert payload["properties"]["Tags"] == {
-        "multi_select": [{"name": "product"}, {"name": "explore"}]
-    }
-    assert payload["icon"] == {"type": "emoji", "emoji": "🧩"}
 
 
 def test_project_page_icon_follows_the_project_type():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
 
     icons = {
@@ -200,7 +157,6 @@ def test_project_page_icon_follows_the_project_type():
                 project_type=project_type,
                 intent="learn",
                 priority="Low",
-                tasks=["Read"],
             )
         )["icon"]["emoji"]
         for project_type in (
@@ -223,85 +179,11 @@ def test_project_page_icon_follows_the_project_type():
     }
 
 
-def test_builds_task_payload_with_project_relation():
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-    )
-
-    payload = writer.build_task_payload(
-        task_name="Read docs",
-        priority="High",
-        project_id="project-page-id",
-    )
-
-    assert payload["parent"] == {"database_id": "tasks-db"}
-    assert payload["template"] == {"type": "default"}
-    properties = payload["properties"]
-    assert properties["Task name"]["title"][0]["text"]["content"] == "Read docs"
-    assert properties["Status"] == {"status": {"name": "Not started"}}
-    assert properties["Priority"] == {"select": {"name": "High"}}
-    assert properties["Projects"] == {"relation": [{"id": "project-page-id"}]}
-
-
-def test_commit_reuses_one_client_and_writes_tasks_concurrently():
-    client = FakeClient()
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-        client=client,
-    )
-    draft = ProjectDraft(
-        project_name="Example",
-        summary="Example summary.",
-        project_type="product",
-        intent="learn",
-        priority="High",
-        tasks=["Read", "Summarise", "Apply"],
-    )
-
-    result = asyncio.run(writer.create_project_with_tasks(draft))
-
-    assert result.project_id == "page-1"
-    assert result.task_ids == ["page-2", "page-3", "page-4"]
-    assert client.max_concurrent_requests == 3
-    assert all(
-        payload["parent"] == {"database_id": "tasks-db"}
-        for _, payload in client.posts[1:]
-    )
-
-
-def test_tasks_relate_back_to_the_created_project():
-    client = FakeClient()
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-        client=client,
-    )
-    draft = ProjectDraft(
-        project_name="Example",
-        summary="Example summary.",
-        project_type="product",
-        intent="learn",
-        priority="High",
-        tasks=["Read"],
-    )
-
-    asyncio.run(writer.create_project_with_tasks(draft))
-
-    _, task_payload = client.posts[1]
-    assert task_payload["properties"]["Projects"] == {"relation": [{"id": "page-1"}]}
-
-
 def test_commit_skips_properties_the_database_does_not_have():
     client = FakeClient(project_properties={"Project name", "Status", "Summary"})
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
         client=client,
     )
     draft = ProjectDraft(
@@ -311,10 +193,9 @@ def test_commit_skips_properties_the_database_does_not_have():
         intent="learn",
         priority="High",
         source_url="https://example.com",
-        tasks=["Read"],
     )
 
-    asyncio.run(writer.create_project_with_tasks(draft))
+    asyncio.run(writer.create_project(draft))
 
     _, project_payload = client.posts[0]
     assert set(project_payload["properties"]) == {"Project name", "Status", "Summary"}
@@ -328,7 +209,6 @@ def test_commit_uses_legacy_type_column_until_notion_is_renamed():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
         client=client,
     )
     draft = ProjectDraft(
@@ -338,10 +218,9 @@ def test_commit_uses_legacy_type_column_until_notion_is_renamed():
         intent="explore",
         priority="Medium",
         source_url="https://cursor.com/origin",
-        tasks=["Explore"],
     )
 
-    asyncio.run(writer.create_project_with_tasks(draft))
+    asyncio.run(writer.create_project(draft))
 
     _, project_payload = client.posts[0]
     assert "Project type" not in project_payload["properties"]
@@ -353,7 +232,6 @@ def test_commit_reads_the_schema_once_per_writer():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
         client=client,
     )
     draft = ProjectDraft(
@@ -362,14 +240,12 @@ def test_commit_reads_the_schema_once_per_writer():
         project_type="product",
         intent="learn",
         priority="High",
-        tasks=["Read"],
     )
 
-    asyncio.run(writer.create_project_with_tasks(draft))
-    asyncio.run(writer.create_project_with_tasks(draft))
+    asyncio.run(writer.create_project(draft))
+    asyncio.run(writer.create_project(draft))
 
-    assert len(client.gets) == 2
-    assert len(set(client.gets)) == 2
+    assert client.gets == ["https://api.notion.com/v1/databases/projects-db"]
 
 
 def test_schema_report_is_healthy_when_every_property_exists():
@@ -377,7 +253,6 @@ def test_schema_report_is_healthy_when_every_property_exists():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
         client=client,
     )
 
@@ -385,19 +260,17 @@ def test_schema_report_is_healthy_when_every_property_exists():
 
     assert report.is_healthy
     assert report.missing_project_properties == []
-    assert report.missing_task_properties == []
+    assert client.gets == ["https://api.notion.com/v1/databases/projects-db"]
     assert report.skipped_project_properties == []
 
 
 def test_schema_report_separates_renamed_columns_from_not_yet_added_ones():
     client = FakeClient(
         project_properties={"Status", "Priority", "Tags", "Summary"},
-        task_properties={"Task name", "Status", "Priority"},
     )
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
         client=client,
     )
 
@@ -405,7 +278,6 @@ def test_schema_report_separates_renamed_columns_from_not_yet_added_ones():
 
     assert not report.is_healthy
     assert report.missing_project_properties == ["Project name"]
-    assert report.missing_task_properties == ["Projects"]
     assert report.skipped_project_properties == [
         "Captured",
         "Intent",
@@ -428,7 +300,6 @@ def test_page_body_bookmarks_the_source_and_keeps_the_original_note():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
     draft = ProjectDraft(
         project_name="LangGraph: build stateful multi-agent workflows",
@@ -437,7 +308,6 @@ def test_page_body_bookmarks_the_source_and_keeps_the_original_note():
         intent="build",
         priority="High",
         source_url="https://blog.langchain.com/langgraph/",
-        tasks=["Explore"],
     )
     context = IncomingContext(
         raw_text="https://blog.langchain.com/langgraph/ want to try this for intake",
@@ -457,18 +327,16 @@ def test_page_body_bookmarks_the_source_and_keeps_the_original_note():
     paragraphs = [_plain_text(block) for block in _children_of(payload, "paragraph")]
     assert "want to try this for intake" in paragraphs
 
-    todos = [_plain_text(block) for block in _children_of(payload, "to_do")]
-    assert todos == ["Explore"]
-
-    callout = _plain_text(_children_of(payload, "callout")[0])
-    assert "2026-07-26" in callout
+    assert _children_of(payload, "to_do") == []
+    assert "Next action" not in [
+        _plain_text(block) for block in _children_of(payload, "heading_3")
+    ]
 
 
 def test_page_body_skips_the_note_when_the_message_was_only_a_link():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
     draft = ProjectDraft(
         project_name="Example",
@@ -477,7 +345,6 @@ def test_page_body_skips_the_note_when_the_message_was_only_a_link():
         intent="learn",
         priority="Low",
         source_url="https://example.com",
-        tasks=["Read"],
     )
     context = IncomingContext(
         raw_text="https://example.com",
@@ -496,7 +363,6 @@ def test_page_body_splits_text_over_the_notion_fragment_limit():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
     draft = ProjectDraft(
         project_name="Example",
@@ -504,7 +370,6 @@ def test_page_body_splits_text_over_the_notion_fragment_limit():
         project_type="product",
         intent="build",
         priority="Low",
-        tasks=["Sketch"],
     )
     context = IncomingContext(raw_text="x" * 4500, note="x" * 4500)
 
@@ -521,7 +386,6 @@ def test_tags_carry_topics_when_the_draft_has_them():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
     draft = ProjectDraft(
         project_name="LangGraph: build stateful multi-agent workflows",
@@ -530,7 +394,6 @@ def test_tags_carry_topics_when_the_draft_has_them():
         intent="build",
         priority="High",
         topics=["LangGraph", "Multi-Agent", "orchestration"],
-        tasks=["Explore"],
     )
 
     payload = writer.build_project_payload(draft)
@@ -548,7 +411,6 @@ def test_topic_tags_drop_duplicates_and_commas():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
     draft = ProjectDraft(
         project_name="Example",
@@ -557,7 +419,6 @@ def test_topic_tags_drop_duplicates_and_commas():
         intent="learn",
         priority="Low",
         topics=["rag", "RAG", "vector, search"],
-        tasks=["Read"],
     )
 
     assert writer.build_project_payload(draft)["properties"]["Tags"] == {
@@ -565,96 +426,10 @@ def test_topic_tags_drop_duplicates_and_commas():
     }
 
 
-def test_task_gets_a_due_date_from_priority_and_carries_the_source():
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-    )
-
-    payload = writer.build_task_payload(
-        task_name="Explore",
-        priority="High",
-        project_id="project-page-id",
-        source_url="https://example.com/adk",
-        today=date(2026, 7, 26),
-    )
-
-    properties = payload["properties"]
-    assert properties["Due"] == {"date": {"start": "2026-07-29"}}
-    assert properties["Source"] == {"url": "https://example.com/adk"}
-
-
-def test_medium_priority_tasks_get_a_softer_due_date():
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-    )
-
-    payload = writer.build_task_payload(
-        task_name="Read",
-        priority="Medium",
-        project_id="project-page-id",
-        today=date(2026, 7, 26),
-    )
-
-    assert payload["properties"]["Due"] == {"date": {"start": "2026-08-09"}}
-
-
-def test_low_priority_tasks_are_left_unscheduled():
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-    )
-
-    payload = writer.build_task_payload(
-        task_name="Read",
-        priority="Low",
-        project_id="project-page-id",
-        today=date(2026, 7, 26),
-    )
-
-    assert "Due" not in payload["properties"]
-
-
-def test_task_properties_are_filtered_against_the_tasks_database():
-    client = FakeClient(
-        task_properties={"Task name", "Status", "Priority", "Projects"},
-    )
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-        client=client,
-    )
-    draft = ProjectDraft(
-        project_name="Example",
-        summary="Example summary.",
-        project_type="product",
-        intent="learn",
-        priority="High",
-        source_url="https://example.com",
-        tasks=["Read"],
-    )
-
-    asyncio.run(writer.create_project_with_tasks(draft))
-
-    _, task_payload = client.posts[1]
-    assert set(task_payload["properties"]) == {
-        "Task name",
-        "Status",
-        "Priority",
-        "Projects",
-    }
-
-
 def test_a_project_page_never_sends_a_template_alongside_its_body():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
     draft = ProjectDraft(
         project_name="Example",
@@ -662,7 +437,6 @@ def test_a_project_page_never_sends_a_template_alongside_its_body():
         project_type="product",
         intent="learn",
         priority="Low",
-        tasks=["Read"],
     )
 
     payload = writer.build_project_payload(draft)
@@ -687,7 +461,6 @@ def test_notion_error_message_reaches_the_caller():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
         client=FailingClient(),
     )
     draft = ProjectDraft(
@@ -696,11 +469,10 @@ def test_notion_error_message_reaches_the_caller():
         project_type="product",
         intent="learn",
         priority="Low",
-        tasks=["Read"],
     )
 
     with pytest.raises(NotionApiError) as failure:
-        asyncio.run(writer.create_project_with_tasks(draft))
+        asyncio.run(writer.create_project(draft))
 
     assert "Tags is expected to be multi_select." in str(failure.value)
     assert "400" in str(failure.value)
@@ -715,10 +487,6 @@ class TagVocabularyClient(FakeClient):
 
     async def get(self, url: str, *, headers) -> FakeResponse:
         self.gets.append(url)
-        if "projects-db" not in url:
-            return FakeResponse(
-                {"properties": {name: {} for name in self.task_properties}}
-            )
         properties: dict[str, Any] = {
             name: {} for name in self.project_properties if name != "Tags"
         }
@@ -728,47 +496,16 @@ class TagVocabularyClient(FakeClient):
         return FakeResponse({"properties": properties})
 
 
-def test_a_topic_folds_onto_the_tag_spelling_already_in_use():
-    """Hyphen-vs-space variants were splitting the vocabulary in two."""
-    client = TagVocabularyClient(["agent evaluation", "llm-agents"])
-    writer = NotionWriter(
-        token="secret",
-        projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
-        client=client,
-    )
-    draft = ProjectDraft(
-        project_name="ACES: evaluate agent skills continuously",
-        short_name="ACES",
-        summary="Continuous evaluation for reusable agent skills.",
-        project_type="paper",
-        intent="learn",
-        priority="Medium",
-        topics=["Agent-Evaluation", "LLM agents", "benchmarking"],
-        tasks=["Read: ACES"],
-    )
-
-    asyncio.run(writer.create_project_with_tasks(draft))
-
-    project_payload = client.posts[0][1]
-    tags = [
-        tag["name"] for tag in project_payload["properties"]["Tags"]["multi_select"]
-    ]
-    assert tags == ["agent evaluation", "llm-agents", "benchmarking"]
-
-
 def test_source_stores_the_canonical_url_so_a_recapture_can_match_it():
     from backlog_tamer.domain import Grounding
 
     draft = ProjectDraft(
         project_name="LangChain Deep Agents: build long-running AI agents",
-        short_name="LangChain Deep Agents",
         summary="Course on long-running agents.",
         project_type="course",
         intent="learn",
         priority="Medium",
         source_url="https://academy.langchain.com/courses/deepagents?_gl=1*174rmm0",
-        tasks=["Work through: LangChain Deep Agents"],
     )
     grounding = Grounding(
         fetch_status="success",
@@ -777,7 +514,6 @@ def test_source_stores_the_canonical_url_so_a_recapture_can_match_it():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
     )
 
     payload = writer.build_project_payload(draft, grounding=grounding)
@@ -792,7 +528,6 @@ def test_schema_report_names_the_capability_a_missing_source_column_disables():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
         client=client,
     )
 
@@ -800,6 +535,75 @@ def test_schema_report_names_the_capability_a_missing_source_column_disables():
 
     assert report.skipped_project_properties == ["Source"]
     assert report.degraded_capabilities == ["duplicate-detection"]
+
+
+def test_provenance_callout_names_the_date_site_and_triage():
+    from backlog_tamer.domain import Grounding
+
+    writer = NotionWriter(token="secret", projects_database_id="projects-db")
+    draft = ProjectDraft(
+        project_name="LangGraph",
+        summary="Graph of stateful nodes.",
+        project_type="repository",
+        intent="build",
+        priority="High",
+        source_url="https://github.com/langchain-ai/langgraph",
+    )
+
+    payload = writer.build_project_payload(
+        draft,
+        captured_at=date(2026, 7, 26),
+        grounding=Grounding(fetch_status="success", site_name="GitHub"),
+    )
+
+    assert _plain_text(_children_of(payload, "callout")[0]) == (
+        "Captured via Telegram on 2026-07-26 · GitHub · triaged by backlog-tamer"
+    )
+
+
+def test_topic_tags_fold_spelling_variants_and_keep_at_most_three():
+    writer = NotionWriter(token="secret", projects_database_id="projects-db")
+    draft = ProjectDraft(
+        project_name="ACES: evaluate agent skills continuously",
+        summary="Continuous evaluation for reusable agent skills.",
+        project_type="paper",
+        intent="learn",
+        priority="Medium",
+        topics=["Agent-Evaluation", "agent evaluations", "LLM agents"],
+    )
+
+    tags = writer.build_project_payload(draft)["properties"]["Tags"]
+
+    assert tags == {
+        "multi_select": [{"name": "agent-evaluation"}, {"name": "llm agents"}]
+    }
+
+
+def test_commit_makes_one_page_and_ignores_the_existing_tag_vocabulary():
+    client = TagVocabularyClient(["agent evaluation"])
+    writer = NotionWriter(
+        token="secret",
+        projects_database_id="projects-db",
+        client=client,
+    )
+    draft = ProjectDraft(
+        project_name="ACES",
+        summary="Continuous evaluation for reusable agent skills.",
+        project_type="paper",
+        intent="learn",
+        priority="Medium",
+        topics=["Agent-Evaluation"],
+    )
+
+    result = asyncio.run(writer.create_project(draft))
+
+    assert (result.project_id, result.project_url) == (
+        "page-1",
+        "https://notion.so/page-1",
+    )
+    assert len(client.posts) == 1
+    tags = client.posts[0][1]["properties"]["Tags"]["multi_select"]
+    assert tags == [{"name": "agent-evaluation"}]
 
 
 def test_list_projects_follows_every_page_of_the_query():
@@ -816,7 +620,6 @@ def test_list_projects_follows_every_page_of_the_query():
     writer = NotionWriter(
         token="secret",
         projects_database_id="projects-db",
-        tasks_database_id="tasks-db",
         client=client,
     )
 

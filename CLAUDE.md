@@ -40,18 +40,16 @@ It is also outside the ECR lifecycle rule that retains `v`-prefixed releases, so
 Property names live in `integrations/notion/writer.py` as module constants —
 rename a column in Notion and it is a one-line change there.
 
-Required (the deploy healthcheck fails without them):
+Drafts carry no Tasks, so only the Projects database is written. Required (the deploy healthcheck fails without them):
 
 - **Projects**: `Project name` (title), `Status`, `Priority`, `Tags` (multi-select), `Summary` (rich text)
-- **Tasks**: `Task name` (title), `Status`, `Priority`, `Projects` (relation)
 
-Optional, listed in `OPTIONAL_PROJECT_PROPERTIES` / `OPTIONAL_TASK_PROPERTIES`.
+Optional, listed in `OPTIONAL_PROJECT_PROPERTIES`.
 The writer reads each database's schema once and silently drops properties that
 do not exist, so these can be added whenever — until then the feature is just
 absent:
 
 - **Projects**: `Source` (url), `Project type` (select, formerly `Type`), `Intent` (select), `Captured` (date)
-- **Tasks**: `Due` (date), `Source` (url)
 
 That silence is how `Project type` and `Intent` went missing from the live
 workspace for months while the agent kept classifying into them. Run

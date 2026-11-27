@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///backlog_tamer.db"
     notion_token: SecretStr | None = None
     notion_projects_database_id: str
-    notion_tasks_database_id: str
     notion_api_version: str = "2022-06-28"
 
     model_config = SettingsConfigDict(

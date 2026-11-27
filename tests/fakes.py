@@ -30,7 +30,6 @@ def build_settings(database_url: str = "sqlite:///:memory:") -> Settings:
         ),
         database_url=database_url,
         notion_projects_database_id="test-projects-db",
-        notion_tasks_database_id="test-tasks-db",
     )
 
 
@@ -127,7 +126,7 @@ class FakeNotionWriter:
         self.groundings: list[Grounding | None] = []
         self.existing_project: ExistingProject | None = None
         self.archived: list[str] = []
-        self.added_task_project_ids: list[str] = []
+        self.pages_created = 0
         self.tag_options: list[str] = []
 
     async def list_tag_options(self) -> list[str]:
@@ -139,17 +138,7 @@ class FakeNotionWriter:
     async def archive_pages(self, page_ids: list[str]) -> None:
         self.archived.extend(page_ids)
 
-    async def add_tasks_to_project(
-        self,
-        *,
-        project_id: str,
-        draft: ProjectDraft,
-        grounding: Grounding | None = None,
-    ):
-        self.added_task_project_ids.append(project_id)
-        return ["new-task-id"]
-
-    async def create_project_with_tasks(
+    async def create_project(
         self,
         draft: ProjectDraft,
         incoming_context: IncomingContext | None = None,
@@ -160,8 +149,8 @@ class FakeNotionWriter:
         self.groundings.append(grounding)
         if self.fail:
             raise RuntimeError("notion unavailable")
+        self.pages_created += 1
         return NotionCommitResult(
             project_id="project-id",
             project_url="https://notion.so/project-id",
-            task_ids=["task-id"],
         )

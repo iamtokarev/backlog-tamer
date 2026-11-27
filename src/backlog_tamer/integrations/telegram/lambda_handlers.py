@@ -98,9 +98,8 @@ def _healthcheck() -> dict[str, Any]:
     schema = asyncio.run(NotionWriter.from_settings(settings).describe_schema())
     if not schema.is_healthy:
         raise RuntimeError(
-            "Notion databases are missing properties the writer sends: "
-            f"projects={schema.missing_project_properties}, "
-            f"tasks={schema.missing_task_properties}"
+            "Notion Projects database is missing properties the writer sends: "
+            f"{schema.missing_project_properties}"
         )
 
     # importlib.metadata returns None rather than raising when the installed

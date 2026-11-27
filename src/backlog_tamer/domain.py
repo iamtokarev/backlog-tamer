@@ -45,14 +45,6 @@ class Grounding(BaseModel):
 
 class ProjectDraft(BaseModel):
     project_name: str = Field(min_length=1)
-    short_name: str = Field(
-        default="",
-        max_length=60,
-        description=(
-            "The bare handle the project is known by, 2 to 4 words, with no "
-            'payoff clause: "SKILL.state", "NVIDIA PAIR", "Stanford CS146S".'
-        ),
-    )
     summary: str = Field(min_length=1, max_length=600)
     project_type: Literal[
         "paper",
@@ -81,21 +73,6 @@ class ProjectDraft(BaseModel):
     priority: Literal["Low", "Medium", "High"]
     source_url: str | None = None
     topics: list[str] = Field(default_factory=list, max_length=3)
-    tasks: list[str] = Field(default_factory=list)
-
-    @property
-    def effective_short_name(self) -> str:
-        """The handle to build task names from.
-
-        Drafts persisted before short_name existed fall back to the part of
-        project_name before the payoff clause, which is where the agent
-        already puts the handle ("SKILL.state: scalable long-horizon ...").
-        """
-        if self.short_name.strip():
-            return self.short_name.strip()
-
-        head = self.project_name.split(":", 1)[0].strip()
-        return head or self.project_name.strip()
 
     def with_edits(self, fields: dict[str, str]) -> "ProjectDraft":
         """This Draft with `fields` applied, validated like a fresh one."""
