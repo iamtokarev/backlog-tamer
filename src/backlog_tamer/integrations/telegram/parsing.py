@@ -3,7 +3,7 @@ from __future__ import annotations
 from telegram import Message, MessageEntity
 from telegram.constants import MessageEntityType
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, SourceLink
+from backlog_tamer.domain import IncomingContext, SourceLink
 
 
 def build_incoming_context(message: Message) -> IncomingContext:

@@ -6,12 +6,12 @@ from urllib.parse import urlparse
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
+from backlog_tamer.application.models import ConfirmationStatus
+from backlog_tamer.domain import (
+    Grounding,
     IncomingContext,
     ProjectDraft,
 )
-from backlog_tamer.application.models import ConfirmationStatus
 
 from .callbacks import (
     Action,
@@ -84,15 +84,8 @@ def render_change_summary(before: ProjectDraft, after: ProjectDraft) -> str | No
         if old != new:
             changes.append(f"{label} {old} → {new}")
 
-    if len(before.tasks) != len(after.tasks):
-        changes.append(f"tasks {len(before.tasks)} → {len(after.tasks)}")
-    elif before.tasks != after.tasks:
-        changes.append("tasks rewritten")
-
     if before.project_name != after.project_name:
         changes.append("title rewritten")
-    if before.summary != after.summary:
-        changes.append("summary rewritten")
     if before.source_url != after.source_url:
         changes.append("source changed")
 
@@ -125,9 +118,9 @@ def render_progress_message(incoming: IncomingContext) -> str:
 
 def render_draft_message(
     draft: ProjectDraft,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
 ) -> str:
-    """Render the review card: title first, then meta, summary, source, tasks."""
+    """Render the review card: title first, then meta, summary, source, topics."""
     lines = [
         f"<b>{escape(draft.project_name)}</b>",
         _render_chips(draft),
@@ -138,10 +131,6 @@ def render_draft_message(
     if draft.source_url:
         lines.append("")
         lines.append(_render_source(draft.source_url, grounding))
-
-    if draft.tasks:
-        lines.append("")
-        lines.extend(f"☑︎ {escape(task)}" for task in draft.tasks)
 
     if draft.topics:
         lines.append("")
@@ -154,14 +143,14 @@ def render_draft_message(
     return "\n".join(lines)
 
 
-def _render_source(source_url: str, grounding: DraftGrounding | None) -> str:
+def _render_source(source_url: str, grounding: Grounding | None) -> str:
     line = f"🔗 {_link(source_url, _display_url(source_url))}"
     if grounding is not None and grounding.site_name:
         line = f"{line} · {escape(grounding.site_name)}"
     return line
 
 
-def _render_fetch_warning(grounding: DraftGrounding) -> str:
+def _render_fetch_warning(grounding: Grounding) -> str:
     """State the uncertainty rather than letting a guess look grounded."""
     reason = f" ({escape(grounding.fetch_error)})" if grounding.fetch_error else ""
     return (
@@ -190,7 +179,7 @@ def _display_url(url: str) -> str:
 def build_review_keyboard(
     draft: ProjectDraft,
     confirmation_id: str,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
 ) -> InlineKeyboardMarkup:
     """Approve/reject, plus one-tap pickers for the three enum fields."""
     refetch_row = []
@@ -314,7 +303,7 @@ def render_terminal_message(
         lines.append("<i>Send the item again if you want it back.</i>")
         return "\n".join(lines)
 
-    lines.append(f"{_render_chips(draft)} · {_task_count(draft)}")
+    lines.append(_render_chips(draft))
     return "\n".join(lines)
 
 
@@ -358,22 +347,11 @@ def build_terminal_keyboard(
             [
                 [
                     InlineKeyboardButton("↗️ Open existing", url=notion_project_url),
-                    InlineKeyboardButton(
-                        "＋ Add task there",
-                        callback_data=encode_callback(
-                            ConfirmationAction(Action.ADD_TASK, confirmation_id)
-                        ),
-                    ),
                 ]
             ]
         )
 
     return None
-
-
-def _task_count(draft: ProjectDraft) -> str:
-    count = len(draft.tasks)
-    return "1 task" if count == 1 else f"{count} tasks"
 
 
 def _format_created_time(created_time: str | None) -> str | None:

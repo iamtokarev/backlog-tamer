@@ -2,27 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 import httpx
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    DraftGrounding,
+from backlog_tamer.config import Settings
+from backlog_tamer.domain import (
+    MAX_TOPICS,
+    Grounding,
     IncomingContext,
     ProjectDraft,
+    fold_tag,
 )
-from backlog_tamer.config import Settings
 
 logger = logging.getLogger(__name__)
 
 NOTION_API_BASE_URL = "https://api.notion.com/v1"
 PROJECT_STATUS = "Backlog"
-TASK_STATUS = "Not started"
 
 # Notion property names, in one place: renaming a column in Notion is a
 # one-line change here, and the healthcheck reports the mismatch.
@@ -37,13 +37,6 @@ PROJECT_TAGS_PROPERTY = "Tags"
 PROJECT_CAPTURED_PROPERTY = "Captured"
 PROJECT_SUMMARY_PROPERTY = "Summary"
 
-TASK_NAME_PROPERTY = "Task name"
-TASK_STATUS_PROPERTY = "Status"
-TASK_PRIORITY_PROPERTY = "Priority"
-TASK_PROJECT_PROPERTY = "Projects"
-TASK_DUE_PROPERTY = "Due"
-TASK_SOURCE_PROPERTY = "Source"
-
 # Properties the writer sends but a database may legitimately not have yet.
 # Anything outside this set is required and reported as missing.
 OPTIONAL_PROJECT_PROPERTIES = frozenset(
@@ -54,10 +47,6 @@ OPTIONAL_PROJECT_PROPERTIES = frozenset(
         PROJECT_CAPTURED_PROPERTY,
     }
 )
-OPTIONAL_TASK_PROPERTIES = frozenset({TASK_DUE_PROPERTY, TASK_SOURCE_PROPERTY})
-
-# A soft first-touch date, so an item has a "when" and can be scheduled.
-PRIORITY_DUE_DAYS = {"High": 3, "Medium": 14, "Low": None}
 
 PROJECT_TYPE_EMOJI = {
     "paper": "🧪",
@@ -80,7 +69,6 @@ PROPERTY_CAPABILITIES = {PROJECT_SOURCE_PROPERTY: "duplicate-detection"}
 class NotionCommitResult:
     project_id: str
     project_url: str
-    task_ids: list[str]
 
 
 @dataclass(frozen=True)
@@ -93,13 +81,12 @@ class ExistingProject:
 @dataclass(frozen=True)
 class NotionSchemaReport:
     missing_project_properties: list[str]
-    missing_task_properties: list[str]
     skipped_project_properties: list[str]
     degraded_capabilities: list[str] = field(default_factory=list)
 
     @property
     def is_healthy(self) -> bool:
-        return not self.missing_project_properties and not self.missing_task_properties
+        return not self.missing_project_properties
 
 
 class NotionWriter:
@@ -108,13 +95,11 @@ class NotionWriter:
         *,
         token: str,
         projects_database_id: str,
-        tasks_database_id: str,
         api_version: str = "2022-06-28",
         client: httpx.AsyncClient | None = None,
     ):
         self.token = token
         self.projects_database_id = projects_database_id
-        self.tasks_database_id = tasks_database_id
         self.api_version = api_version
         self.client = client
         self._property_cache: dict[str, set[str]] = {}
@@ -127,17 +112,15 @@ class NotionWriter:
         return cls(
             token=settings.notion_token.get_secret_value(),
             projects_database_id=settings.notion_projects_database_id,
-            tasks_database_id=settings.notion_tasks_database_id,
             api_version=settings.notion_api_version,
         )
 
-    async def create_project_with_tasks(
+    async def create_project(
         self,
         draft: ProjectDraft,
         incoming_context: IncomingContext | None = None,
-        grounding: DraftGrounding | None = None,
+        grounding: Grounding | None = None,
     ) -> NotionCommitResult:
-        known_tags = await self.list_tag_options()
         async with self._session() as client:
             payload = await self._fit_to_schema(
                 client,
@@ -146,34 +129,13 @@ class NotionWriter:
                     draft,
                     incoming_context=incoming_context,
                     grounding=grounding,
-                    known_tags=known_tags,
                 ),
             )
             project = await self._post_page(client, payload)
-            project_id = _require_text(project, "id")
-            project_url = _require_text(project, "url")
-
-            task_payloads = [
-                await self._fit_to_schema(
-                    client,
-                    self.tasks_database_id,
-                    self.build_task_payload(
-                        task_name=task_name,
-                        priority=draft.priority,
-                        project_id=project_id,
-                        source_url=commit_source_url(draft, grounding),
-                    ),
-                )
-                for task_name in draft.tasks
-            ]
-            tasks = await asyncio.gather(
-                *(self._post_page(client, payload) for payload in task_payloads)
-            )
 
         return NotionCommitResult(
-            project_id=project_id,
-            project_url=project_url,
-            task_ids=[_require_text(task, "id") for task in tasks],
+            project_id=_require_text(project, "id"),
+            project_url=_require_text(project, "url"),
         )
 
     def build_project_payload(
@@ -181,8 +143,7 @@ class NotionWriter:
         draft: ProjectDraft,
         captured_at: date | None = None,
         incoming_context: IncomingContext | None = None,
-        grounding: DraftGrounding | None = None,
-        known_tags: list[str] | None = None,
+        grounding: Grounding | None = None,
     ) -> dict[str, Any]:
         captured_on = captured_at or date.today()
         source_url = commit_source_url(draft, grounding)
@@ -192,7 +153,7 @@ class NotionWriter:
             PROJECT_PRIORITY_PROPERTY: _select(draft.priority),
             PROJECT_TYPE_PROPERTY: _select(draft.project_type),
             PROJECT_INTENT_PROPERTY: _select(draft.intent),
-            PROJECT_TAGS_PROPERTY: {"multi_select": _draft_tags(draft, known_tags)},
+            PROJECT_TAGS_PROPERTY: {"multi_select": _draft_tags(draft)},
             PROJECT_CAPTURED_PROPERTY: _date(captured_on),
             PROJECT_SUMMARY_PROPERTY: _rich_text(draft.summary),
         }
@@ -211,35 +172,6 @@ class NotionWriter:
                 grounding=grounding,
                 captured_on=captured_on,
             ),
-        }
-
-    def build_task_payload(
-        self,
-        *,
-        task_name: str,
-        priority: str,
-        project_id: str,
-        source_url: str | None = None,
-        today: date | None = None,
-    ) -> dict[str, Any]:
-        properties: dict[str, Any] = {
-            TASK_NAME_PROPERTY: _title(task_name),
-            TASK_STATUS_PROPERTY: _status(TASK_STATUS),
-            TASK_PRIORITY_PROPERTY: _select(priority),
-            TASK_PROJECT_PROPERTY: {"relation": [{"id": project_id}]},
-        }
-
-        due_on = _due_date(priority, today)
-        if due_on is not None:
-            properties[TASK_DUE_PROPERTY] = _date(due_on)
-        if source_url:
-            # So the task is actionable without opening the project first.
-            properties[TASK_SOURCE_PROPERTY] = {"url": source_url}
-
-        return {
-            "parent": {"database_id": self.tasks_database_id},
-            "template": {"type": "default"},
-            "properties": properties,
         }
 
     async def list_tag_options(self) -> list[str]:
@@ -263,6 +195,25 @@ class NotionWriter:
         definition = schema.get(PROJECT_TAGS_PROPERTY) or {}
         options = (definition.get("multi_select") or {}).get("options") or []
         return [str(option["name"]) for option in options if option.get("name")]
+
+    async def list_projects(self) -> list[dict[str, Any]]:
+        """Every page in the Projects database, raw; the eval's golden export."""
+        pages: list[dict[str, Any]] = []
+        body: dict[str, Any] = {"page_size": 100}
+        async with self._session() as client:
+            while True:
+                response = await client.post(
+                    f"{NOTION_API_BASE_URL}/databases/"
+                    f"{self.projects_database_id}/query",
+                    headers=self._headers(),
+                    json=body,
+                )
+                _raise_for_notion_error(response)
+                payload = response.json()
+                pages.extend(payload.get("results") or [])
+                if not payload.get("has_more"):
+                    return pages
+                body = {**body, "start_cursor": payload["next_cursor"]}
 
     async def find_project_by_source(self, source_url: str) -> ExistingProject | None:
         """Look for a project already saved from this URL.
@@ -302,33 +253,6 @@ class NotionWriter:
             page_url=_require_text(results[0], "url"),
             created_time=results[0].get("created_time"),
         )
-
-    async def add_tasks_to_project(
-        self,
-        *,
-        project_id: str,
-        draft: ProjectDraft,
-        grounding: DraftGrounding | None = None,
-    ) -> list[str]:
-        """Attach this draft's tasks to a project that already exists."""
-        async with self._session() as client:
-            payloads = [
-                await self._fit_to_schema(
-                    client,
-                    self.tasks_database_id,
-                    self.build_task_payload(
-                        task_name=task_name,
-                        priority=draft.priority,
-                        project_id=project_id,
-                        source_url=commit_source_url(draft, grounding),
-                    ),
-                )
-                for task_name in draft.tasks
-            ]
-            tasks = await asyncio.gather(
-                *(self._post_page(client, payload) for payload in payloads)
-            )
-        return [_require_text(task, "id") for task in tasks]
 
     async def archive_pages(self, page_ids: list[str]) -> None:
         """Undo a commit. Notion archives pages rather than deleting them."""
@@ -412,7 +336,7 @@ class NotionWriter:
         return self._property_cache[database_id]
 
     async def describe_schema(self) -> NotionSchemaReport:
-        """Compare what the writer sends against what the databases have.
+        """Compare what the writer sends against what the Projects database has.
 
         Called from the healthcheck: a property renamed in Notion otherwise
         fails as a 400 during finalize_approval, after the user approved and
@@ -423,10 +347,6 @@ class NotionWriter:
                 client,
                 self.projects_database_id,
             )
-            task_properties = await self._database_properties(
-                client,
-                self.tasks_database_id,
-            )
 
         sample = ProjectDraft(
             project_name="schema probe",
@@ -435,20 +355,10 @@ class NotionWriter:
             intent="learn",
             priority="Medium",
             source_url="https://example.com",
-            tasks=["probe"],
         )
         wanted_project = set(self.build_project_payload(sample)["properties"])
         if LEGACY_PROJECT_TYPE_PROPERTY in project_properties:
             project_properties.add(PROJECT_TYPE_PROPERTY)
-        wanted_task = set(
-            self.build_task_payload(
-                task_name="probe",
-                priority="Medium",
-                project_id="probe",
-                source_url="https://example.com",
-            )["properties"]
-        )
-
         skipped_project = sorted(
             (wanted_project - project_properties) & OPTIONAL_PROJECT_PROPERTIES
         )
@@ -470,9 +380,6 @@ class NotionWriter:
         return NotionSchemaReport(
             missing_project_properties=sorted(
                 (wanted_project - project_properties) - OPTIONAL_PROJECT_PROPERTIES
-            ),
-            missing_task_properties=sorted(
-                (wanted_task - task_properties) - OPTIONAL_TASK_PROPERTIES
             ),
             skipped_project_properties=skipped_project,
             degraded_capabilities=degraded,
@@ -540,7 +447,7 @@ class NotionWriter:
 
 def commit_source_url(
     draft: ProjectDraft,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
 ) -> str | None:
     """The URL to store, preferring the canonical one.
 
@@ -557,7 +464,7 @@ def build_project_children(
     draft: ProjectDraft,
     *,
     incoming_context: IncomingContext | None = None,
-    grounding: DraftGrounding | None = None,
+    grounding: Grounding | None = None,
     captured_on: date | None = None,
 ) -> list[dict[str, Any]]:
     """The page body.
@@ -586,16 +493,12 @@ def build_project_children(
         children.append(_heading("Key points"))
         children.extend(_bulleted(point) for point in grounding.key_points)
 
-    if draft.tasks:
-        children.append(_heading("Next action"))
-        children.extend(_to_do(task) for task in draft.tasks)
-
     provenance = [
         f"Captured via Telegram on {(captured_on or date.today()).isoformat()}"
     ]
     if grounding is not None and grounding.site_name:
         provenance.append(grounding.site_name)
-    provenance.append("drafted by intake_triage")
+    provenance.append("triaged by backlog-tamer")
     children.append(_callout("🤖", " · ".join(provenance)))
     return children
 
@@ -638,14 +541,6 @@ def _bulleted(text: str) -> dict[str, Any]:
     }
 
 
-def _to_do(text: str) -> dict[str, Any]:
-    return {
-        "object": "block",
-        "type": "to_do",
-        "to_do": {"rich_text": _text_fragments(text), "checked": False},
-    }
-
-
 def _callout(emoji: str, text: str) -> dict[str, Any]:
     return {
         "object": "block",
@@ -664,13 +559,6 @@ def _text_fragments(value: str) -> list[dict[str, Any]]:
         {"type": "text", "text": {"content": value[index : index + limit]}}
         for index in range(0, max(len(value), 1), limit)
     ]
-
-
-def _due_date(priority: str, today: date | None = None) -> date | None:
-    days = PRIORITY_DUE_DAYS.get(priority)
-    if days is None:
-        return None
-    return (today or date.today()) + timedelta(days=days)
 
 
 def _date(value: date) -> dict[str, Any]:
@@ -697,58 +585,20 @@ def _status(value: str) -> dict[str, Any]:
     return {"status": {"name": value}}
 
 
-def _draft_tags(
-    draft: ProjectDraft,
-    known_tags: list[str] | None = None,
-) -> list[dict[str, str]]:
-    """Tags carry topics now that Type and Intent are their own properties.
-
-    Drafts written before topics existed fall back to the old behaviour so
-    their tags do not come out empty.
+def _draft_tags(draft: ProjectDraft) -> list[dict[str, str]]:
+    """Tags carry topics in the vocabulary's own spelling, free of the commas
+    Notion splits on, and one per spelling, so "agent-evaluation" and
+    "agent evaluations" stay one tag.
     """
-    if draft.topics:
-        return [
-            {"name": topic} for topic in _normalized_topics(draft.topics, known_tags)
-        ]
-
     tags: list[str] = []
-    tags.append(draft.project_type)
-    tags.append("explore" if draft.intent == "unclear" else draft.intent)
-    return [{"name": tag} for tag in tags]
-
-
-def _normalized_topics(
-    topics: list[str],
-    known_tags: list[str] | None = None,
-) -> list[str]:
-    """Lowercase, de-duplicated, and free of the commas Notion splits on.
-
-    A topic that matches an existing tag once hyphens, case and a trailing
-    plural are folded away is rewritten to that tag's exact spelling, so
-    "agent-evaluation" stops becoming a second option beside "agent
-    evaluation". Existing tags are never rewritten, only matched against.
-    """
-    existing = {_tag_key(tag): tag for tag in reversed(known_tags or [])}
-
-    seen: list[str] = []
-    for topic in topics:
-        cleaned = topic.strip().lower().replace(",", " ")
-        cleaned = " ".join(cleaned.split())
-        if not cleaned:
+    seen: set[str] = set()
+    for topic in draft.topics:
+        cleaned = " ".join(topic.replace(",", " ").split())
+        if not cleaned or fold_tag(cleaned) in seen:
             continue
-        cleaned = existing.get(_tag_key(cleaned), cleaned)
-        if cleaned not in seen:
-            seen.append(cleaned)
-    return seen[:3]
-
-
-def _tag_key(tag: str) -> str:
-    """Fold spelling differences that should not create a second tag."""
-    folded = re.sub(r"[^a-z0-9]+", " ", tag.casefold()).strip()
-    return " ".join(
-        word[:-1] if len(word) > 3 and word.endswith("s") else word
-        for word in folded.split()
-    )
+        seen.add(fold_tag(cleaned))
+        tags.append(cleaned)
+    return [{"name": tag} for tag in tags[:MAX_TOPICS]]
 
 
 class NotionApiError(RuntimeError):

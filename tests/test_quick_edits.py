@@ -5,11 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from backlog_tamer.agents.intake_triage.schemas import IncomingContext, ProjectDraft
-from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 from backlog_tamer.application.confirmation_store import (
     ConfirmationStore,
-    _load_manual_edits,
     utc_now,
 )
 from backlog_tamer.application.models import (
@@ -17,6 +14,7 @@ from backlog_tamer.application.models import (
     ConfirmationStatus,
     ManualEdit,
 )
+from backlog_tamer.domain import IncomingContext, ProjectDraft
 from backlog_tamer.integrations.telegram.callbacks import PickValue, decode_callback
 from backlog_tamer.integrations.telegram.rendering import (
     FIELD_OPTIONS,
@@ -24,7 +22,7 @@ from backlog_tamer.integrations.telegram.rendering import (
 )
 
 
-def test_quick_edit_patches_the_draft_without_touching_the_agent(tmp_path: Path):
+def test_quick_edit_patches_the_draft_without_a_triage_call(tmp_path: Path):
     store = _build_store(tmp_path)
     record = _build_confirmation()
     store.create_pending(record)
@@ -46,7 +44,7 @@ def test_quick_edit_patches_the_draft_without_touching_the_agent(tmp_path: Path)
     assert stored.draft_proposal.priority == "Low"
 
 
-def test_quick_edits_accumulate_and_clear_on_the_next_agent_draft(tmp_path: Path):
+def test_quick_edits_accumulate_and_outlast_a_new_draft(tmp_path: Path):
     store = _build_store(tmp_path)
     record = _build_confirmation()
     store.create_pending(record)
@@ -66,44 +64,11 @@ def test_quick_edits_accumulate_and_clear_on_the_next_agent_draft(tmp_path: Path
         "intent": ManualEdit(before="explore", after="reference"),
     }
 
-    store.update_after_resume(
-        confirmation_id=record.confirmation_id,
-        draft_proposal=edited.draft_proposal,
-        checkpoint=Checkpoint(
-            user_id="user-id",
-            session_id="session-id",
-            invocation_id="invocation-2",
-            request_input_call_id="call-2",
-        ),
-        review_message="Review again.",
-    )
+    store.update_draft(record.confirmation_id, edited.draft_proposal)
 
     redrafted = store.get(record.confirmation_id)
     assert redrafted is not None
-    assert redrafted.manual_edits == {}
-
-
-def test_old_type_picker_value_is_normalized_for_an_in_flight_draft(tmp_path: Path):
-    store = _build_store(tmp_path)
-    record = _build_confirmation()
-    store.create_pending(record)
-
-    updated = store.apply_manual_edit(
-        confirmation_id=record.confirmation_id,
-        field="project_type",
-        value="documentation",
-    )
-
-    assert updated.draft_proposal.project_type == "tool"
-    assert updated.manual_edits == {
-        "project_type": ManualEdit(before="product", after="tool")
-    }
-
-
-def test_persisted_resource_type_manual_edit_is_migrated_on_load():
-    edits = _load_manual_edits('{"resource_type": "repository"}')
-
-    assert edits == {"project_type": ManualEdit(before="", after="repository")}
+    assert redrafted.manual_edits == edited.manual_edits
 
 
 def test_quick_edit_is_rejected_once_the_draft_is_resolved(tmp_path: Path):
@@ -145,12 +110,6 @@ def _build_confirmation() -> ConfirmationRecord:
         user_id="user-id",
         chat_id="chat-id",
         source_message_id="message-id",
-        checkpoint=Checkpoint(
-            user_id="user-id",
-            session_id="session-id",
-            invocation_id="invocation-id",
-            request_input_call_id="call-id",
-        ),
         status=ConfirmationStatus.PENDING_REVIEW,
         incoming_context=IncomingContext(raw_text="https://example.com"),
         draft_proposal=ProjectDraft(
@@ -160,9 +119,7 @@ def _build_confirmation() -> ConfirmationRecord:
             intent="explore",
             priority="Medium",
             source_url="https://example.com",
-            tasks=["Read"],
         ),
-        review_message="Review this draft.",
         created_at=now,
         updated_at=now,
     )

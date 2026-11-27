@@ -4,16 +4,15 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from fakes import FakeNotionWriter, ScriptedTriageWorkflow, build_settings
+from fakes import FakeNotionWriter, FakeReader, FakeTriage, build_settings
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    IncomingContext,
-    ProjectDraft,
-)
-from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 from backlog_tamer.application.confirmation_store import ConfirmationStore, utc_now
 from backlog_tamer.application.intake_service import IntakeService
 from backlog_tamer.application.models import ConfirmationRecord, ConfirmationStatus
+from backlog_tamer.domain import (
+    IncomingContext,
+    ProjectDraft,
+)
 from backlog_tamer.integrations.notion import ExistingProject
 
 
@@ -32,6 +31,7 @@ def test_finalize_approval_commits_project_and_is_idempotent(tmp_path: Path):
     assert first.notion_project_url == "https://notion.so/project-id"
     assert second.notion_project_url == "https://notion.so/project-id"
     assert len(writer.calls) == 1
+    assert writer.pages_created == 1
 
     stored = store.get(record.confirmation_id)
     assert stored is not None
@@ -107,7 +107,8 @@ def _build_service(
         settings=build_settings(),
         store=store,
         notion_writer=writer,
-        workflow=ScriptedTriageWorkflow(),
+        triage=FakeTriage(),
+        reader=FakeReader(),
     )
 
 
@@ -118,12 +119,6 @@ def _build_confirmation() -> ConfirmationRecord:
         user_id="user-id",
         chat_id="chat-id",
         source_message_id="message-id",
-        checkpoint=Checkpoint(
-            user_id="user-id",
-            session_id="session-id",
-            invocation_id="invocation-id",
-            request_input_call_id="call-id",
-        ),
         status=ConfirmationStatus.PENDING_REVIEW,
         incoming_context=IncomingContext(raw_text="https://example.com"),
         draft_proposal=ProjectDraft(
@@ -133,9 +128,7 @@ def _build_confirmation() -> ConfirmationRecord:
             intent="explore",
             priority="Medium",
             source_url="https://example.com",
-            tasks=["Review example"],
         ),
-        review_message="Review this draft.",
         created_at=now,
         updated_at=now,
     )
@@ -168,30 +161,7 @@ def test_duplicate_source_is_reported_instead_of_creating_a_second_project(
     assert stored.notion_project_id == "existing-id"
 
 
-def test_a_duplicate_can_have_its_tasks_added_to_the_existing_project(tmp_path: Path):
-    store = _build_store(tmp_path)
-    record = _build_confirmation()
-    store.create_pending(record)
-    writer = FakeNotionWriter()
-    writer.existing_project = ExistingProject(
-        page_id="existing-id",
-        page_url="https://notion.so/existing-id",
-    )
-    service = _build_service(store, writer)
-
-    asyncio.run(service.finalize_approval(record.confirmation_id))
-    result = asyncio.run(service.add_to_existing_project(record.confirmation_id))
-
-    assert result.status == ConfirmationStatus.COMMITTED.value
-    assert writer.added_task_project_ids == ["existing-id"]
-    assert writer.calls == []
-
-    stored = store.get(record.confirmation_id)
-    assert stored is not None
-    assert stored.notion_task_ids == ["new-task-id"]
-
-
-def test_undo_archives_every_page_the_commit_created(tmp_path: Path):
+def test_undo_archives_the_one_page_the_commit_created(tmp_path: Path):
     store = _build_store(tmp_path)
     record = _build_confirmation()
     store.create_pending(record)
@@ -202,13 +172,12 @@ def test_undo_archives_every_page_the_commit_created(tmp_path: Path):
     result = asyncio.run(service.undo_commit(record.confirmation_id))
 
     assert result.status == ConfirmationStatus.UNDONE.value
-    assert writer.archived == ["project-id", "task-id"]
+    assert writer.archived == ["project-id"]
 
     stored = store.get(record.confirmation_id)
     assert stored is not None
     assert stored.status == ConfirmationStatus.UNDONE
     assert stored.notion_project_url is None
-    assert stored.notion_task_ids == []
 
 
 def test_undo_is_a_no_op_when_nothing_was_committed(tmp_path: Path):

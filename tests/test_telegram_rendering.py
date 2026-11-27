@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from backlog_tamer.agents.intake_triage.schemas import (
+from backlog_tamer.application.models import ConfirmationStatus
+from backlog_tamer.domain import (
     IncomingContext,
     ProjectDraft,
     SourceLink,
 )
-from backlog_tamer.application.models import ConfirmationStatus
 from backlog_tamer.integrations.telegram.rendering import (
     build_terminal_keyboard,
     render_change_summary,
@@ -24,7 +24,6 @@ def _draft(**overrides) -> ProjectDraft:
         "intent": "build",
         "priority": "High",
         "source_url": "https://blog.langchain.com/langgraph-multi-agent-workflows/",
-        "tasks": ["Explore"],
     }
     payload.update(overrides)
     return ProjectDraft(**payload)
@@ -37,7 +36,7 @@ def test_draft_message_renders_every_field():
     assert "tool" in message
     assert "build" in message
     assert "High" in message
-    assert "Explore" in message
+    assert "☑︎" not in message
     assert "blog.langchain.com" in message
 
 
@@ -86,11 +85,10 @@ def test_draft_message_strips_www_from_the_displayed_domain():
     assert ">arxiv.org</a>" in message
 
 
-def test_draft_message_handles_a_draft_without_tasks_or_source():
-    message = render_draft_message(_draft(tasks=[], source_url=None))
+def test_draft_message_handles_a_draft_without_a_source():
+    message = render_draft_message(_draft(source_url=None))
 
     assert "🔗" not in message
-    assert "☑︎" not in message
     assert message.endswith("Graph of stateful nodes with explicit control flow.")
 
 
@@ -115,24 +113,27 @@ def test_progress_message_falls_back_when_there_is_no_link():
 
 def test_change_summary_names_moved_fields():
     before = _draft()
-    after = _draft(priority="Medium", tasks=["Read", "Prototype"])
+    after = _draft(
+        priority="Medium",
+        intent="learn",
+        project_type="repository",
+        project_name="LangGraph",
+        source_url="https://github.com/langchain-ai/langgraph",
+    )
 
     summary = render_change_summary(before, after)
 
-    assert summary is not None
-    assert "priority High → Medium" in summary
-    assert "tasks 1 → 2" in summary
+    assert summary == (
+        "✏️ <i>Changed: priority High → Medium · intent build → learn"
+        " · project type tool → repository · title rewritten"
+        " · source changed</i>"
+    )
 
 
-def test_change_summary_reports_rewritten_prose_without_quoting_it():
-    before = _draft()
+def test_change_summary_ignores_a_rewritten_summary():
     after = _draft(summary="A much shorter summary.")
 
-    summary = render_change_summary(before, after)
-
-    assert summary is not None
-    assert "summary rewritten" in summary
-    assert "A much shorter summary." not in summary
+    assert render_change_summary(_draft(), after) is None
 
 
 def test_change_summary_is_absent_when_nothing_moved():
@@ -159,8 +160,10 @@ def test_committed_message_is_compact_and_links_out_via_a_button():
     )
 
     assert "✅ <b>Saved to Notion</b>" in message
-    assert "LangGraph: build stateful multi-agent workflows" in message
-    assert "1 task" in message
+    assert message.split("\n")[1:] == [
+        "LangGraph: build stateful multi-agent workflows",
+        "🛠️ tool · 🔨 build · 🔺 High",
+    ]
     # The whole draft is no longer repeated once it lives in Notion.
     assert "Graph of stateful nodes" not in message
     assert "notion.so" not in message
@@ -191,7 +194,10 @@ def test_duplicate_message_says_when_it_was_first_saved():
 
     assert "🔁 <b>Already in your backlog</b>" in message
     assert "since 04 Jun 2026" in message
-    assert actions == ["addtask:confirmation-id"]
+    assert actions == []
+    assert [b.text for row in keyboard.inline_keyboard for b in row] == [
+        "↗️ Open existing"
+    ]
 
 
 def test_failed_message_keeps_the_whole_draft_and_a_retry_button():

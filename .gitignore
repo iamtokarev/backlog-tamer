@@ -28,3 +28,9 @@ infra/terraform/backend.hcl
 
 # Notion migration snapshots
 notion-projects-snapshot-*.json
+
+# Local specs, issues and experiments (never committed; the repo is public)
+.scratch/
+
+# Eval golden set, answer cache and reports (personal Notion data)
+evals/data/

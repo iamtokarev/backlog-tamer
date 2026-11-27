@@ -7,14 +7,8 @@ from sqlalchemy import DateTime, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-from backlog_tamer.agents.intake_triage.schemas import (
-    LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE,
-    DraftGrounding,
-    IncomingContext,
-    ProjectDraft,
-)
-from backlog_tamer.agents.intake_triage.triage_workflow import Checkpoint
 from backlog_tamer.database_urls import to_sync_database_url, uses_external_pooler
+from backlog_tamer.domain import Grounding, IncomingContext, ProjectDraft
 
 from .models import ConfirmationRecord, ConfirmationStatus, ManualEdit
 
@@ -34,13 +28,9 @@ class ConfirmationRow(Base):
     user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     chat_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    session_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    invocation_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    request_input_call_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     incoming_context_json: Mapped[str] = mapped_column(Text, nullable=False)
     draft_proposal_json: Mapped[str] = mapped_column(Text, nullable=False)
-    review_message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -58,7 +48,15 @@ class ConfirmationRow(Base):
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     manual_edits_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     grounding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Legacy columns: kept for rollback to v0.8.0, dropped in decision-triage/09.
+    # Tasks are no longer created, so this one is neither written nor read.
     notion_task_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    invocation_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    request_input_call_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=""
+    )
+    review_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class ConfirmationStore:
@@ -80,25 +78,18 @@ class ConfirmationStore:
             row = session.get(ConfirmationRow, confirmation_id)
             return self._record_from_row(row) if row is not None else None
 
-    def update_after_resume(
+    def update_draft(
         self,
-        *,
         confirmation_id: str,
-        draft_proposal: ProjectDraft,
-        checkpoint: Checkpoint,
-        review_message: str,
-        grounding: DraftGrounding | None = None,
+        draft: ProjectDraft,
+        grounding: Grounding | None = None,
     ) -> None:
+        """Replace the Draft (and Grounding, when given); Quick edits stay."""
         with self.session_factory.begin() as session:
             row = self._get_required_row(session, confirmation_id)
-            row.draft_proposal_json = draft_proposal.model_dump_json()
+            row.draft_proposal_json = draft.model_dump_json()
             if grounding is not None:
                 row.grounding_json = grounding.model_dump_json()
-            row.session_id = checkpoint.session_id
-            row.invocation_id = checkpoint.invocation_id
-            row.request_input_call_id = checkpoint.request_input_call_id
-            row.review_message = review_message
-            row.manual_edits_json = None
             row.updated_at = utc_now()
 
     def apply_manual_edit(
@@ -168,7 +159,6 @@ class ConfirmationStore:
         confirmation_id: str,
         notion_project_id: str,
         notion_project_url: str,
-        notion_task_ids: list[str] | None = None,
     ) -> None:
         now = utc_now()
         with self.session_factory.begin() as session:
@@ -176,7 +166,6 @@ class ConfirmationStore:
             row.status = ConfirmationStatus.COMMITTED.value
             row.notion_project_id = notion_project_id
             row.notion_project_url = notion_project_url
-            row.notion_task_ids_json = json.dumps(notion_task_ids or [])
             row.failure_reason = None
             row.updated_at = now
             row.resolved_at = now
@@ -199,7 +188,7 @@ class ConfirmationStore:
             row.updated_at = now
 
     def mark_undone(self, confirmation_id: str) -> ConfirmationRecord:
-        """The pages were archived, so the record no longer points at Notion."""
+        """The page was archived, so the record no longer points at Notion."""
         now = utc_now()
         with self.session_factory.begin() as session:
             row = self._get_required_row(session, confirmation_id)
@@ -210,7 +199,6 @@ class ConfirmationStore:
             row.status = ConfirmationStatus.UNDONE.value
             row.notion_project_id = None
             row.notion_project_url = None
-            row.notion_task_ids_json = None
             row.updated_at = now
             row.resolved_at = now
             return self._record_from_row(row)
@@ -254,13 +242,9 @@ class ConfirmationStore:
             user_id=record.user_id,
             chat_id=record.chat_id,
             source_message_id=record.source_message_id,
-            session_id=record.checkpoint.session_id,
-            invocation_id=record.checkpoint.invocation_id,
-            request_input_call_id=record.checkpoint.request_input_call_id,
             status=record.status.value,
             incoming_context_json=record.incoming_context.model_dump_json(),
             draft_proposal_json=record.draft_proposal.model_dump_json(),
-            review_message=record.review_message,
             created_at=record.created_at,
             updated_at=record.updated_at,
             resolved_at=record.resolved_at,
@@ -271,9 +255,6 @@ class ConfirmationStore:
             if record.manual_edits
             else None,
             grounding_json=record.grounding.model_dump_json(),
-            notion_task_ids_json=json.dumps(record.notion_task_ids)
-            if record.notion_task_ids
-            else None,
         )
 
     def _record_from_row(self, row: ConfirmationRow) -> ConfirmationRecord:
@@ -282,18 +263,11 @@ class ConfirmationStore:
             user_id=row.user_id,
             chat_id=row.chat_id,
             source_message_id=row.source_message_id,
-            checkpoint=Checkpoint(
-                user_id=row.user_id,
-                session_id=row.session_id,
-                invocation_id=row.invocation_id,
-                request_input_call_id=row.request_input_call_id,
-            ),
             status=ConfirmationStatus(row.status),
             incoming_context=IncomingContext.model_validate_json(
                 row.incoming_context_json
             ),
             draft_proposal=ProjectDraft.model_validate_json(row.draft_proposal_json),
-            review_message=row.review_message,
             created_at=row.created_at,
             updated_at=row.updated_at,
             resolved_at=row.resolved_at,
@@ -302,7 +276,6 @@ class ConfirmationStore:
             failure_reason=row.failure_reason,
             manual_edits=_load_manual_edits(row.manual_edits_json),
             grounding=_load_grounding(row.grounding_json),
-            notion_task_ids=_load_task_ids(row.notion_task_ids_json),
         )
 
     def _ensure_commit_columns(self) -> None:
@@ -334,23 +307,13 @@ class ConfirmationStore:
                 )
 
 
-def _load_task_ids(raw: str | None) -> list[str]:
+def _load_grounding(raw: str | None) -> Grounding:
     if not raw:
-        return []
+        return Grounding()
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    return [str(item) for item in parsed] if isinstance(parsed, list) else []
-
-
-def _load_grounding(raw: str | None) -> DraftGrounding:
-    if not raw:
-        return DraftGrounding()
-    try:
-        return DraftGrounding.model_validate_json(raw)
+        return Grounding.model_validate_json(raw)
     except ValueError:
-        return DraftGrounding()
+        return Grounding()
 
 
 def _load_manual_edits(raw: str | None) -> dict[str, ManualEdit]:
@@ -369,22 +332,7 @@ def _load_manual_edits(raw: str | None) -> dict[str, ManualEdit]:
             edits[str(key)] = ManualEdit.coerce(value)
         except (TypeError, ValueError):
             continue
-
-    legacy_type = edits.pop("resource_type", None)
-    if legacy_type is not None and "project_type" not in edits:
-        edits["project_type"] = legacy_type.model_copy(
-            update={
-                "before": _migrated_project_type(legacy_type.before),
-                "after": _migrated_project_type(legacy_type.after),
-            }
-        )
     return edits
-
-
-def _migrated_project_type(value: str) -> str:
-    if not value:
-        return value
-    return LEGACY_RESOURCE_TYPE_TO_PROJECT_TYPE.get(value, value)
 
 
 def _dump_manual_edits(edits: dict[str, ManualEdit]) -> str:

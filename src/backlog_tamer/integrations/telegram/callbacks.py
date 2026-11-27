@@ -34,7 +34,6 @@ class Action(StrEnum):
     REFETCH = "refetch"
     RETRY = "retry"
     UNDO = "undo"
-    ADD_TASK = "addtask"
     BACK = "back"
 
 
