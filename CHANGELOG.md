@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.9.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.8.0...v0.9.0) (2026-11-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* the Notion Tasks database and NOTION_TASKS_DATABASE_ID are no longer used.
+* AGENT__* and LANGSMITH_* settings are ignored.
+
+### Features
+
+* drafts carry no Tasks ([df5f9f7](https://github.com/iamtokarev/backlog-tamer/commit/df5f9f72b4765417abf55f68721cb694a7718909))
+* eval pipeline over the production Triage ([165e3f2](https://github.com/iamtokarev/backlog-tamer/commit/165e3f2dfc0a05089222a51b43e2d2f491002c05))
+* healthcheck probes the decision and title models ([6dc33c3](https://github.com/iamtokarev/backlog-tamer/commit/6dc33c3bc62a731775219f88ec9e76f34557a430))
+* prototype decision-model triage engine ([d6341fa](https://github.com/iamtokarev/backlog-tamer/commit/d6341fadcde08a239b4151fe02e1459af0fbe51e))
+
+
+### Bug Fixes
+
+* address decision-triage code review ([bc8d4e9](https://github.com/iamtokarev/backlog-tamer/commit/bc8d4e9f99b86de9de0ddd43acf74014bb169400))
+* eval offers the Notion Tags options as the vocabulary ([ecd1736](https://github.com/iamtokarev/backlog-tamer/commit/ecd173655464f51b13f436cc5f3023f42fcbc699))
+
+
+### Documentation
+
+* replace README text diagrams with an animated how-it-works SVG ([ac0dbee](https://github.com/iamtokarev/backlog-tamer/commit/ac0dbee1744554b9c9b8874e08ee527b3b2969b8))
+* turn the README into a showcase page ([11c57e8](https://github.com/iamtokarev/backlog-tamer/commit/11c57e8974b819ff20bc9b1a8cf17967ab189670))
+* use mise commands in the README and setup guide ([a4143bc](https://github.com/iamtokarev/backlog-tamer/commit/a4143bcb9ff8580fa68b9e26e57d2ff469ba24a3))
+
+
+### Code Refactoring
+
+* drive IntakeService with Triage and delete the ADK agent ([c5ab79d](https://github.com/iamtokarev/backlog-tamer/commit/c5ab79d9c16b832476aa5407c3c8eab07040f38f))
+
 ## [0.8.0](https://github.com/iamtokarev/backlog-tamer/compare/v0.7.2...v0.8.0) (2026-11-05)
 
 
